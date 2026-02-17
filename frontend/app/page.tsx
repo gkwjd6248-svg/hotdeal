@@ -19,9 +19,13 @@ const TRENDING_KEYWORDS = [
 
 async function getTotalDeals(): Promise<number> {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${API_BASE}/api/v1/deals?limit=1`, {
       next: { revalidate: 60 },
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     if (!res.ok) throw new Error("API error");
     const json: ApiResponse<Deal[]> = await res.json();
     return json.meta?.total ?? 0;

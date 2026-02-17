@@ -35,9 +35,13 @@ interface DealDetailPageProps {
 
 async function getDeal(id: string): Promise<DealDetail | null> {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${API_BASE}/api/v1/deals/${id}`, {
       next: { revalidate: 60 },
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     if (!res.ok) return null;
     const json: ApiResponse<DealDetail> = await res.json();
     if (json.status === "success") return json.data;

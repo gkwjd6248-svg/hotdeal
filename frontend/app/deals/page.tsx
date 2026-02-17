@@ -30,9 +30,13 @@ async function getDealsMetadata(params: {
     if (params.shop) qs.set("shop", params.shop);
     if (params.sort) qs.set("sort_by", params.sort);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${API_BASE}/api/v1/deals?${qs.toString()}`, {
       next: { revalidate: 30 },
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     if (!res.ok) throw new Error("API error");
     const json: ApiResponse<Deal[]> = await res.json();
     const total = json.meta?.total ?? 0;
@@ -41,9 +45,13 @@ async function getDealsMetadata(params: {
     let categoryName = "전체";
     if (params.category && params.category !== "all") {
       try {
+        const catController = new AbortController();
+        const catTimeout = setTimeout(() => catController.abort(), 5000);
         const catRes = await fetch(`${API_BASE}/api/v1/categories`, {
           next: { revalidate: 300 },
+          signal: catController.signal,
         });
+        clearTimeout(catTimeout);
         if (catRes.ok) {
           const catJson = await catRes.json();
           const matched = catJson.data?.find(

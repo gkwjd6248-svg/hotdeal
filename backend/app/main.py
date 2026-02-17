@@ -90,12 +90,12 @@ async def lifespan(app: FastAPI):
                 ]
                 session.add_all(shops)
                 categories = [
-                    Category(id=uuid.uuid4(), name="PC/하드웨어", slug="pc-hardware", icon="Monitor", sort_order=1),
-                    Category(id=uuid.uuid4(), name="노트북/모바일", slug="laptop-mobile", icon="Laptop", sort_order=2),
-                    Category(id=uuid.uuid4(), name="게임/SW", slug="games-software", icon="Gamepad2", sort_order=3),
-                    Category(id=uuid.uuid4(), name="가전/TV", slug="electronics-tv", icon="Tv", sort_order=4),
-                    Category(id=uuid.uuid4(), name="생활/식품", slug="living-food", icon="ShoppingCart", sort_order=5),
-                    Category(id=uuid.uuid4(), name="상품권/쿠폰", slug="voucher-coupon", icon="Ticket", sort_order=6),
+                    Category(id=uuid.uuid4(), name="PC/하드웨어", name_en="PC/Hardware", slug="pc-hardware", icon="Monitor", sort_order=1),
+                    Category(id=uuid.uuid4(), name="노트북/모바일", name_en="Laptop/Mobile", slug="laptop-mobile", icon="Laptop", sort_order=2),
+                    Category(id=uuid.uuid4(), name="게임/SW", name_en="Games/Software", slug="games-software", icon="Gamepad2", sort_order=3),
+                    Category(id=uuid.uuid4(), name="가전/TV", name_en="Electronics/TV", slug="electronics-tv", icon="Tv", sort_order=4),
+                    Category(id=uuid.uuid4(), name="생활/식품", name_en="Living/Food", slug="living-food", icon="ShoppingCart", sort_order=5),
+                    Category(id=uuid.uuid4(), name="상품권/쿠폰", name_en="Voucher/Coupon", slug="voucher-coupon", icon="Ticket", sort_order=6),
                 ]
                 session.add_all(categories)
                 await session.commit()

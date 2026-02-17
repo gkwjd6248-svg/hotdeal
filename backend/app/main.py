@@ -8,14 +8,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_v1_router
 from app.config import settings
-from app.db.session import async_session_factory
+from app.db.session import async_session_factory, engine
 import asyncio
+import uuid
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
 from app.scrapers.scheduler import ScraperScheduler
 from app.scrapers.register_adapters import register_all_adapters
 from app.scrapers.utils.browser_manager import get_browser_manager
 from app.scrapers.utils.normalizer import CurrencyConverter
 from app.services.cache_service import get_cache_service
+from app.models.base import Base
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +43,43 @@ async def lifespan(app: FastAPI):
     logger.info("Starting DealHawk API server...")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug mode: {settings.DEBUG}")
+
+    # Auto-create tables on startup (safe for fresh deployments)
+    try:
+        # Import all models so they register with Base.metadata
+        from app.models import shop, category, product, price_history, deal, scraper_job, search_keyword, user, comment, user_vote, price_alert
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified/created")
+
+        # Seed initial data if empty
+        from app.models.shop import Shop
+        from app.models.category import Category
+        async_sess = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with async_sess() as session:
+            result = await session.execute(select(Shop).limit(1))
+            if not result.scalar_one_or_none():
+                logger.info("Seeding initial shops and categories...")
+                shops = [
+                    Shop(id=uuid.uuid4(), name="네이버 쇼핑", name_en="Naver Shopping", slug="naver", base_url="https://shopping.naver.com", adapter_type="api", is_active=True, scrape_interval_minutes=30, country="KR", currency="KRW"),
+                    Shop(id=uuid.uuid4(), name="스팀", name_en="Steam", slug="steam", base_url="https://store.steampowered.com", adapter_type="api", is_active=True, scrape_interval_minutes=60, country="US", currency="USD"),
+                    Shop(id=uuid.uuid4(), name="쿠팡", name_en="Coupang", slug="coupang", base_url="https://www.coupang.com", adapter_type="api", is_active=False, scrape_interval_minutes=30, country="KR", currency="KRW"),
+                    Shop(id=uuid.uuid4(), name="11번가", name_en="11st", slug="11st", base_url="https://www.11st.co.kr", adapter_type="api", is_active=False, scrape_interval_minutes=30, country="KR", currency="KRW"),
+                ]
+                session.add_all(shops)
+                categories = [
+                    Category(id=uuid.uuid4(), name="PC/하드웨어", slug="pc-hardware", icon="Monitor", sort_order=1),
+                    Category(id=uuid.uuid4(), name="노트북/모바일", slug="laptop-mobile", icon="Laptop", sort_order=2),
+                    Category(id=uuid.uuid4(), name="게임/SW", slug="games-software", icon="Gamepad2", sort_order=3),
+                    Category(id=uuid.uuid4(), name="가전/TV", slug="electronics-tv", icon="Tv", sort_order=4),
+                    Category(id=uuid.uuid4(), name="생활/식품", slug="living-food", icon="ShoppingCart", sort_order=5),
+                    Category(id=uuid.uuid4(), name="상품권/쿠폰", slug="voucher-coupon", icon="Ticket", sort_order=6),
+                ]
+                session.add_all(categories)
+                await session.commit()
+                logger.info("Seed data inserted")
+    except Exception as e:
+        logger.error(f"Database init failed: {e}", exc_info=True)
 
     # Register all scraper adapters
     logger.info("Registering scraper adapters...")

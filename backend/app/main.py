@@ -14,7 +14,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.scrapers.scheduler import ScraperScheduler
 from app.scrapers.register_adapters import register_all_adapters
@@ -48,9 +48,31 @@ async def lifespan(app: FastAPI):
     try:
         # Import all models so they register with Base.metadata
         from app.models import shop, category, product, price_history, deal, scraper_job, search_keyword, user, comment, user_vote, price_alert
+
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified/created")
+
+        # Create optional PostgreSQL-specific indexes (GIN trigram for search)
+        if not settings.DATABASE_URL.startswith("sqlite"):
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS idx_deals_title_trgm "
+                        "ON deals USING gin (title gin_trgm_ops)"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS idx_products_title_trgm "
+                        "ON products USING gin (title gin_trgm_ops)"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS idx_deals_ai_score_active "
+                        "ON deals (ai_score) WHERE is_active = true"
+                    ))
+                logger.info("PostgreSQL GIN/partial indexes created")
+            except Exception as idx_err:
+                logger.warning(f"Could not create optional PG indexes (non-fatal): {idx_err}")
 
         # Seed initial data if empty
         from app.models.shop import Shop

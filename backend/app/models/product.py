@@ -87,27 +87,11 @@ class Product(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Constraints and indexes
-    # GIN trigram index is PostgreSQL-only; skip for SQLite
-    _indexes = [
+    # NOTE: GIN trigram indexes are created separately in main.py (require pg_trgm extension)
+    __table_args__ = (
         UniqueConstraint("external_id", "shop_id", name="uq_product_external_shop"),
         Index("idx_products_active_scraped", "is_active", "last_scraped_at"),
-    ]
-
-    try:
-        from app.config import settings as _s
-        if not _s.DATABASE_URL.startswith("sqlite"):
-            _indexes.append(
-                Index(
-                    "idx_products_title_trgm",
-                    "title",
-                    postgresql_using="gin",
-                    postgresql_ops={"title": "gin_trgm_ops"},
-                )
-            )
-    except Exception:
-        pass
-
-    __table_args__ = tuple(_indexes)
+    )
 
     # Relationships
     shop: Mapped["Shop"] = relationship(back_populates="products")

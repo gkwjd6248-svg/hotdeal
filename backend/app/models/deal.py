@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import String, Text, ForeignKey, Boolean, Numeric, DateTime, Integer, Index, text
+from sqlalchemy import String, Text, ForeignKey, Boolean, Numeric, DateTime, Integer, Index
 from sqlalchemy import JSON as JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -136,21 +136,10 @@ class Deal(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Indexes for efficient queries
+    # NOTE: GIN trigram indexes are created separately in main.py (require pg_trgm extension)
     __table_args__ = (
         Index("idx_deals_active_created", "is_active", "created_at"),
-        Index(
-            "idx_deals_ai_score_active",
-            "ai_score",
-            postgresql_where=text("is_active = true")
-        ),
-        Index(
-            "idx_deals_title_trgm",
-            "title",
-            postgresql_using="gin",
-            postgresql_ops={"title": "gin_trgm_ops"}
-        ),
         Index("idx_deals_expires_at", "expires_at"),
-        Index("idx_deals_vote_up_desc", "vote_up", postgresql_using="btree"),
     )
 
     # Relationships

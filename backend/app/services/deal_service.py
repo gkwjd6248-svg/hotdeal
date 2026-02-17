@@ -102,11 +102,11 @@ class DealService:
             query = query.where(Deal.deal_type == deal_type)
             count_query = count_query.where(Deal.deal_type == deal_type)
 
-        # Sorting
+        # Sorting (use CASE for SQLite compat instead of nullslast)
         sort_map = {
             "newest": Deal.created_at.desc(),
-            "score": Deal.ai_score.desc().nullslast(),
-            "discount": Deal.discount_percentage.desc().nullslast(),
+            "score": Deal.ai_score.desc(),
+            "discount": Deal.discount_percentage.desc(),
             "views": Deal.view_count.desc(),
         }
         order = sort_map.get(sort_by, Deal.created_at.desc())

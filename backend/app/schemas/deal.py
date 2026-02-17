@@ -1,7 +1,6 @@
 """Deal Pydantic schemas for request/response validation."""
 
 from datetime import datetime
-from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
@@ -35,10 +34,10 @@ class DealResponse(BaseModel):
 
     id: UUID
     title: str
-    deal_price: Decimal
-    original_price: Optional[Decimal] = None
-    discount_percentage: Optional[Decimal] = None
-    ai_score: Optional[Decimal] = None
+    deal_price: float
+    original_price: Optional[float] = None
+    discount_percentage: Optional[float] = None
+    ai_score: Optional[float] = None
     ai_reasoning: Optional[str] = None
     deal_type: str
     deal_url: str

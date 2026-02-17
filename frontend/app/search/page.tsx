@@ -1,60 +1,33 @@
-import DealGrid from "@/components/deals/DealGrid";
-import ShopFilter from "@/components/navigation/ShopFilter";
+import { Suspense } from "react";
 import SortDropdown from "@/components/navigation/SortDropdown";
-import { MOCK_DEALS } from "@/lib/mock-data";
-import { Deal, ApiResponse } from "@/lib/types";
+import SearchResults from "@/components/search/SearchResults";
+import DealCardSkeleton from "@/components/deals/DealCardSkeleton";
 import { Search } from "lucide-react";
-
-const API_BASE = process.env.BACKEND_URL || "http://localhost:8000";
+import Link from "next/link";
 
 interface SearchPageProps {
   searchParams: {
     q?: string;
-    shop?: string;
     sort?: string;
   };
 }
 
-async function searchDeals(params: SearchPageProps["searchParams"]): Promise<{ deals: Deal[]; total: number }> {
-  const query = params.q || "";
-  if (!query.trim()) return { deals: [], total: 0 };
-
-  try {
-    const searchParams = new URLSearchParams();
-    searchParams.set("q", query);
-    searchParams.set("limit", "20");
-    if (params.shop) searchParams.set("shop", params.shop);
-    if (params.sort) searchParams.set("sort_by", params.sort === "newest" ? "newest" : params.sort === "score" ? "score" : "relevance");
-
-    const res = await fetch(`${API_BASE}/api/v1/search?${searchParams.toString()}`, {
-      next: { revalidate: 60 },
-    });
-    if (!res.ok) throw new Error("API error");
-    const json: ApiResponse<Deal[]> = await res.json();
-    return { deals: json.data, total: json.meta?.total ?? json.data.length };
-  } catch {
-    // Fallback to mock data
-    const lowerQuery = query.toLowerCase();
-    const deals = MOCK_DEALS.filter(
-      (d) =>
-        d.title.toLowerCase().includes(lowerQuery) ||
-        d.shop.name.toLowerCase().includes(lowerQuery) ||
-        d.category?.name.toLowerCase().includes(lowerQuery)
-    );
-    return { deals, total: deals.length };
-  }
+function SearchGridSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <DealCardSkeleton key={i} />
+      ))}
+    </div>
+  );
 }
 
 export default async function SearchPage({ searchParams }: SearchPageProps) {
-  const query = searchParams.q || "";
-  const { deals, total } = await searchDeals(searchParams);
+  const query = searchParams.q?.trim() || "";
+  const sort = searchParams.sort || "";
 
   return (
     <div className="min-h-screen">
-      {/* Shop filter */}
-      <ShopFilter />
-
-      {/* Main content */}
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
         {/* Search header */}
         <div className="mb-6">
@@ -69,28 +42,41 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 결과
               </>
             ) : (
-              "검색 결과"
+              "검색어를 입력하세요"
             )}
           </h1>
-          <p className="mt-1 text-sm text-gray-400">
-            {total.toLocaleString()}개의 특가 상품
-          </p>
         </div>
 
-        {/* Controls */}
-        <div className="mb-6 flex items-center justify-end">
-          <SortDropdown />
-        </div>
+        {query ? (
+          <>
+            {/* Controls */}
+            <div className="mb-6 flex items-center justify-end">
+              <SortDropdown />
+            </div>
 
-        {/* Results */}
-        <DealGrid
-          deals={deals}
-          emptyMessage={
-            query
-              ? `"${query}"에 대한 검색 결과가 없습니다`
-              : "검색 결과가 없습니다"
-          }
-        />
+            {/* Results */}
+            <Suspense fallback={<SearchGridSkeleton />}>
+              <SearchResults query={query} sort={sort} />
+            </Suspense>
+          </>
+        ) : (
+          /* No query state */
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <Search className="mb-4 h-16 w-16 text-gray-600" />
+            <p className="mb-2 text-lg font-medium text-gray-300">
+              검색어를 입력해주세요
+            </p>
+            <p className="mb-6 text-sm text-gray-500">
+              상품명, 카테고리, 쇼핑몰로 검색할 수 있습니다
+            </p>
+            <Link
+              href="/deals"
+              className="rounded-lg bg-accent px-6 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+            >
+              전체 특가 보기
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );

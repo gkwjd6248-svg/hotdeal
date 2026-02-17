@@ -1,11 +1,9 @@
 import { Suspense } from "react";
-import DealGrid from "@/components/deals/DealGrid";
 import InfiniteDealGrid from "@/components/deals/InfiniteDealGrid";
+import DealCardSkeleton from "@/components/deals/DealCardSkeleton";
 import ShopFilter from "@/components/navigation/ShopFilter";
 import SortDropdown from "@/components/navigation/SortDropdown";
-import { MOCK_DEALS } from "@/lib/mock-data";
-import { Deal, ApiResponse } from "@/lib/types";
-import { CATEGORIES } from "@/lib/constants";
+import { ApiResponse, Deal } from "@/lib/types";
 
 const API_BASE = process.env.BACKEND_URL || "http://localhost:8000";
 
@@ -17,38 +15,66 @@ interface DealsPageProps {
   };
 }
 
-async function getDeals(params: DealsPageProps["searchParams"]): Promise<{ deals: Deal[]; total: number }> {
+/** Fetch just the total count + category name for the page header (SSR) */
+async function getDealsMetadata(params: {
+  category?: string;
+  shop?: string;
+  sort?: string;
+}): Promise<{ total: number; categoryName: string }> {
   try {
-    const searchParams = new URLSearchParams();
-    searchParams.set("limit", "20");
-    if (params.category && params.category !== "all") searchParams.set("category", params.category);
-    if (params.shop) searchParams.set("shop", params.shop);
-    if (params.sort) searchParams.set("sort_by", params.sort);
+    const qs = new URLSearchParams();
+    qs.set("limit", "1"); // We only need meta.total
+    if (params.category && params.category !== "all") {
+      qs.set("category", params.category);
+    }
+    if (params.shop) qs.set("shop", params.shop);
+    if (params.sort) qs.set("sort_by", params.sort);
 
-    const res = await fetch(`${API_BASE}/api/v1/deals?${searchParams.toString()}`, {
-      next: { revalidate: 60 },
+    const res = await fetch(`${API_BASE}/api/v1/deals?${qs.toString()}`, {
+      next: { revalidate: 30 },
     });
     if (!res.ok) throw new Error("API error");
     const json: ApiResponse<Deal[]> = await res.json();
-    return { deals: json.data, total: json.meta?.total ?? json.data.length };
-  } catch {
-    let deals = MOCK_DEALS;
+    const total = json.meta?.total ?? 0;
+
+    // Fetch category name if filtering
+    let categoryName = "전체";
     if (params.category && params.category !== "all") {
-      deals = deals.filter((d) => d.category?.slug === params.category);
+      try {
+        const catRes = await fetch(`${API_BASE}/api/v1/categories`, {
+          next: { revalidate: 300 },
+        });
+        if (catRes.ok) {
+          const catJson = await catRes.json();
+          const matched = catJson.data?.find(
+            (c: { slug: string; name: string }) => c.slug === params.category
+          );
+          if (matched) categoryName = matched.name;
+        }
+      } catch {
+        // Use slug as fallback
+        categoryName = params.category;
+      }
     }
-    if (params.shop) {
-      const shops = params.shop.split(",");
-      deals = deals.filter((d) => shops.includes(d.shop.slug));
-    }
-    return { deals, total: deals.length };
+
+    return { total, categoryName };
+  } catch {
+    return { total: 0, categoryName: params.category || "전체" };
   }
 }
 
-export default async function DealsPage({ searchParams }: DealsPageProps) {
-  const { deals, total } = await getDeals(searchParams);
+function DealsGridSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {Array.from({ length: 12 }).map((_, i) => (
+        <DealCardSkeleton key={i} />
+      ))}
+    </div>
+  );
+}
 
-  const categoryMatch = CATEGORIES.find((c) => c.slug === searchParams.category);
-  const categoryName = categoryMatch ? categoryMatch.name : "전체";
+export default async function DealsPage({ searchParams }: DealsPageProps) {
+  const { total, categoryName } = await getDealsMetadata(searchParams);
 
   return (
     <div className="min-h-screen">
@@ -60,25 +86,19 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
             <h1 className="text-2xl font-bold text-white">
               {categoryName} 특가
             </h1>
-            <p className="mt-1 text-sm text-gray-400">
-              {total.toLocaleString()}개의 특가 상품
-            </p>
+            {total > 0 && (
+              <p className="mt-1 text-sm text-gray-400">
+                {total.toLocaleString()}개의 특가 상품
+              </p>
+            )}
           </div>
           <SortDropdown />
         </div>
 
-        {/* SSR initial deals + client-side infinite scroll */}
-        {total > 20 ? (
-          <Suspense fallback={<DealGrid deals={deals} />}>
-            <InfiniteDealGrid
-              initialCategory={searchParams.category}
-              initialShop={searchParams.shop}
-              initialSort={searchParams.sort}
-            />
-          </Suspense>
-        ) : (
-          <DealGrid deals={deals} />
-        )}
+        {/* Client-side infinite scroll grid — reads URL params reactively */}
+        <Suspense fallback={<DealsGridSkeleton />}>
+          <InfiniteDealGrid />
+        </Suspense>
       </div>
     </div>
   );

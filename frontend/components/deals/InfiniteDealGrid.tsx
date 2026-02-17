@@ -10,23 +10,22 @@ import { useIntersection } from "@/hooks/useIntersection";
 import { Loader2 } from "lucide-react";
 
 interface InfiniteDealGridProps {
-  /** Initial deals from server-side render (shown while SWR hydrates) */
-  initialCategory?: string;
-  initialShop?: string;
-  initialSort?: string;
   emptyMessage?: string;
 }
 
+/**
+ * Client-side infinite-scroll grid that reads filters from the URL search params.
+ * Automatically re-fetches when category, shop, or sort params change.
+ */
 export default function InfiniteDealGrid({
-  initialCategory,
-  initialShop,
-  initialSort,
   emptyMessage = "특가 상품을 찾을 수 없습니다",
 }: InfiniteDealGridProps) {
   const searchParams = useSearchParams();
-  const category = initialCategory || searchParams.get("category") || undefined;
-  const shop = initialShop || searchParams.get("shop") || undefined;
-  const sort = initialSort || searchParams.get("sort") || undefined;
+
+  // Always read directly from URL params so changes trigger re-fetches via SWR key
+  const category = searchParams.get("category") || undefined;
+  const shop = searchParams.get("shop") || undefined;
+  const sort = searchParams.get("sort") || undefined;
 
   const {
     deals,
@@ -36,6 +35,9 @@ export default function InfiniteDealGrid({
     isReachingEnd,
     loadMore,
   } = useInfiniteDeals({ category, shop, sort });
+
+  // Reset to page 1 whenever filters change — SWR key changes handles this automatically
+  // via the getKey function in useInfiniteDeals.
 
   // Infinite scroll sentinel
   const { ref: sentinelRef, isIntersecting } = useIntersection({
@@ -73,7 +75,7 @@ export default function InfiniteDealGrid({
     <>
       {total > 0 && (
         <p className="mb-4 text-sm text-gray-400">
-          총 {total.toLocaleString()}개 특가
+          총 <span className="font-semibold text-gray-300">{total.toLocaleString()}</span>개 특가
         </p>
       )}
 

@@ -4,7 +4,7 @@ import uuid
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import String, Integer, Boolean
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON as JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin

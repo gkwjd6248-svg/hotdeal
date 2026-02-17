@@ -30,7 +30,7 @@ interface DealDetail extends Deal {
 }
 
 interface DealDetailPageProps {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }
 
 async function getDeal(id: string): Promise<DealDetail | null> {
@@ -84,7 +84,7 @@ const DEAL_TYPE_LABELS: Record<string, string> = {
 export async function generateMetadata({
   params,
 }: DealDetailPageProps): Promise<Metadata> {
-  const { id } = await params;
+  const { id } = params;
   const deal = await getDeal(id);
 
   if (!deal) {
@@ -150,7 +150,7 @@ function AiScoreBadge({ score }: { score: number }) {
 }
 
 export default async function DealDetailPage({ params }: DealDetailPageProps) {
-  const { id } = await params;
+  const { id } = params;
   const deal = await getDeal(id);
 
   if (!deal) {

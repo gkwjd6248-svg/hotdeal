@@ -1,29 +1,47 @@
-import DealGrid from "@/components/deals/DealGrid";
+import { Suspense } from "react";
+import Link from "next/link";
 import ShopFilter from "@/components/navigation/ShopFilter";
 import SortDropdown from "@/components/navigation/SortDropdown";
-import TrendingKeywords from "@/components/search/TrendingKeywords";
-import { MOCK_DEALS } from "@/lib/mock-data";
-import { Deal, ApiResponse } from "@/lib/types";
+import InfiniteDealGrid from "@/components/deals/InfiniteDealGrid";
+import DealCardSkeleton from "@/components/deals/DealCardSkeleton";
+import { ApiResponse, Deal } from "@/lib/types";
 import { Flame, Sparkles } from "lucide-react";
 
 const API_BASE = process.env.BACKEND_URL || "http://localhost:8000";
 
-async function getDeals(): Promise<Deal[]> {
+const TRENDING_KEYWORDS = [
+  "애플 에어팟",
+  "삼성 갤럭시",
+  "LG 그램",
+  "다이슨 청소기",
+  "아이패드",
+];
+
+async function getTotalDeals(): Promise<number> {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/deals?limit=20&sort_by=newest`, {
+    const res = await fetch(`${API_BASE}/api/v1/deals?limit=1`, {
       next: { revalidate: 60 },
     });
     if (!res.ok) throw new Error("API error");
     const json: ApiResponse<Deal[]> = await res.json();
-    return json.data;
+    return json.meta?.total ?? 0;
   } catch {
-    // Fallback to mock data if API is unavailable
-    return MOCK_DEALS;
+    return 0;
   }
 }
 
+function DealsGridSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {Array.from({ length: 12 }).map((_, i) => (
+        <DealCardSkeleton key={i} />
+      ))}
+    </div>
+  );
+}
+
 export default async function HomePage() {
-  const deals = await getDeals();
+  const total = await getTotalDeals();
 
   return (
     <div className="min-h-screen">
@@ -53,18 +71,16 @@ export default async function HomePage() {
                       실시간 인기 검색어
                     </h2>
                     <div className="flex flex-wrap gap-2">
-                      {["애플 에어팟", "삼성 갤럭시", "LG 그램", "다이슨 청소기", "아이패드"].map(
-                        (keyword, i) => (
-                          <a
-                            key={keyword}
-                            href={`/search?q=${encodeURIComponent(keyword)}`}
-                            className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-card-hover hover:text-accent"
-                          >
-                            <span className="text-accent">{i + 1}</span>
-                            {keyword}
-                          </a>
-                        )
-                      )}
+                      {TRENDING_KEYWORDS.map((keyword, i) => (
+                        <Link
+                          key={keyword}
+                          href={`/search?q=${encodeURIComponent(keyword)}`}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-card-hover hover:text-accent"
+                        >
+                          <span className="text-accent">{i + 1}</span>
+                          {keyword}
+                        </Link>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -84,16 +100,20 @@ export default async function HomePage() {
           <div>
             <h2 className="text-lg font-semibold text-white">
               전체 특가{" "}
-              <span className="text-sm font-normal text-gray-400">
-                ({deals.length.toLocaleString()}개)
-              </span>
+              {total > 0 && (
+                <span className="text-sm font-normal text-gray-400">
+                  ({total.toLocaleString()}개)
+                </span>
+              )}
             </h2>
           </div>
           <SortDropdown />
         </div>
 
-        {/* Deal grid */}
-        <DealGrid deals={deals} />
+        {/* Client-side infinite scroll grid */}
+        <Suspense fallback={<DealsGridSkeleton />}>
+          <InfiniteDealGrid />
+        </Suspense>
       </div>
     </div>
   );

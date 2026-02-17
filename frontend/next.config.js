@@ -9,6 +9,7 @@ const nextConfig = {
       { protocol: "https", hostname: "*.naver.com" },
       { protocol: "https", hostname: "*.naver.net" },
       { protocol: "https", hostname: "thumbnail*.coupangcdn.com" },
+      { protocol: "https", hostname: "*.coupangcdn.com" },
       { protocol: "https", hostname: "*.coupang.com" },
       { protocol: "https", hostname: "*.11st.co.kr" },
       { protocol: "https", hostname: "*.gmarket.co.kr" },
@@ -28,6 +29,15 @@ const nextConfig = {
       { protocol: "https", hostname: "*.ebay.com" },
       { protocol: "https", hostname: "i.ebayimg.com" },
       { protocol: "https", hostname: "*.iherb.com" },
+      // Steam / Gaming
+      { protocol: "https", hostname: "shared.akamai.steamstatic.com" },
+      { protocol: "https", hostname: "*.steamstatic.com" },
+      { protocol: "https", hostname: "cdn.akamai.steamstatic.com" },
+      { protocol: "https", hostname: "store.akamai.steamstatic.com" },
+      // General CDNs (for shops adding new image sources)
+      { protocol: "https", hostname: "*.cloudfront.net" },
+      { protocol: "https", hostname: "*.googleapis.com" },
+      { protocol: "https", hostname: "*.ggpht.com" },
     ],
   },
   async rewrites() {

@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import String, Text, ForeignKey, Boolean, Numeric, DateTime, Index, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON as JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -87,16 +87,27 @@ class Product(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Constraints and indexes
-    __table_args__ = (
+    # GIN trigram index is PostgreSQL-only; skip for SQLite
+    _indexes = [
         UniqueConstraint("external_id", "shop_id", name="uq_product_external_shop"),
-        Index(
-            "idx_products_title_trgm",
-            "title",
-            postgresql_using="gin",
-            postgresql_ops={"title": "gin_trgm_ops"}
-        ),
         Index("idx_products_active_scraped", "is_active", "last_scraped_at"),
-    )
+    ]
+
+    try:
+        from app.config import settings as _s
+        if not _s.DATABASE_URL.startswith("sqlite"):
+            _indexes.append(
+                Index(
+                    "idx_products_title_trgm",
+                    "title",
+                    postgresql_using="gin",
+                    postgresql_ops={"title": "gin_trgm_ops"},
+                )
+            )
+    except Exception:
+        pass
+
+    __table_args__ = tuple(_indexes)
 
     # Relationships
     shop: Mapped["Shop"] = relationship(back_populates="products")

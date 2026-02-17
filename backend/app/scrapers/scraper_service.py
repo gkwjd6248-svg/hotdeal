@@ -274,7 +274,7 @@ class ScraperService:
         # This is a simple implementation - could be enhanced with similarity search
         result = await self.db.execute(
             select(Category.id).where(
-                (Category.name_ko.ilike(f"%{category_hint}%")) |
+                (Category.name.ilike(f"%{category_hint}%")) |
                 (Category.name_en.ilike(f"%{category_hint}%"))
             ).limit(1)
         )

@@ -217,11 +217,39 @@ class CacheService:
 _cache_instance: Optional[CacheService] = None
 
 
+class NullCacheService(CacheService):
+    """No-op cache for when Redis is unavailable."""
+
+    def __init__(self):
+        self.redis_url = ""
+        self._redis = None
+        self.logger = logger.bind(service="null_cache")
+
+    async def get(self, key: str) -> Optional[str]:
+        return None
+
+    async def set(self, key: str, value: str, ttl: int = 300) -> bool:
+        return True
+
+    async def delete(self, key: str) -> bool:
+        return True
+
+    async def delete_pattern(self, pattern: str) -> int:
+        return 0
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        pass
+
+
 def get_cache_service() -> CacheService:
     """Get or create the global cache service instance.
 
     This is a singleton factory - the same instance is reused
-    across the application.
+    across the application. Falls back to NullCacheService when
+    Redis URL is not configured.
 
     Returns:
         CacheService instance
@@ -229,8 +257,12 @@ def get_cache_service() -> CacheService:
     global _cache_instance
 
     if _cache_instance is None:
-        _cache_instance = CacheService(settings.REDIS_URL)
-        logger.info("cache_service_initialized", redis_url=settings.REDIS_URL)
+        if settings.REDIS_URL:
+            _cache_instance = CacheService(settings.REDIS_URL)
+            logger.info("cache_service_initialized", redis_url=settings.REDIS_URL)
+        else:
+            _cache_instance = NullCacheService()
+            logger.info("null_cache_service_initialized (no Redis URL)")
 
     return _cache_instance
 

@@ -8,7 +8,16 @@ import asyncio
 from typing import Optional, Dict
 
 import structlog
-from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
+
+try:
+    from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
+    async_playwright = None
+    Browser = None
+    BrowserContext = None
+    Playwright = None
 
 from app.scrapers.utils.user_agents import get_random_user_agent
 from app.scrapers.utils.proxy_manager import ProxyManager, NoProxyManager

@@ -9,7 +9,10 @@ from typing import List, Optional
 
 import structlog
 from bs4 import BeautifulSoup
-from playwright.async_api import Page
+try:
+    from playwright.async_api import Page
+except ImportError:
+    Page = None
 from tenacity import (
     retry,
     stop_after_attempt,

@@ -25,7 +25,11 @@ import re
 from typing import Optional, List
 from datetime import datetime
 from bs4 import BeautifulSoup
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+try:
+    from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+except ImportError:
+    Page = None
+    PlaywrightTimeout = TimeoutError
 
 from app.scrapers.base import BaseScraperAdapter, NormalizedDeal, NormalizedProduct
 from app.scrapers.utils.normalizer import PriceNormalizer, CategoryClassifier

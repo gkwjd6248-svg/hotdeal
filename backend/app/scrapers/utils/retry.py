@@ -9,7 +9,11 @@ from tenacity import (
 )
 import httpx
 import structlog
-from playwright.async_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
+try:
+    from playwright.async_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
+except ImportError:
+    PlaywrightError = Exception
+    PlaywrightTimeoutError = TimeoutError
 
 
 logger = structlog.get_logger(__name__)

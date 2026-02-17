@@ -3,17 +3,14 @@ services:
     name: dealhawk-api
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: bash build.sh
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
     envVars:
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
         value: "false"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: dealhawk-db
-          property: connectionString
       - key: REDIS_URL
         value: ""
       - key: NAVER_CLIENT_ID
@@ -22,8 +19,5 @@ services:
         value: OECscviOsx
       - key: FRONTEND_URL
         value: https://hotdeal-pi.vercel.app
-
-databases:
-  - name: dealhawk-db
-    plan: free
-    databaseName: dealhawk
+      - key: PYTHON_VERSION
+        value: "3.12.0"

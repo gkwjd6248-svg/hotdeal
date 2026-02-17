@@ -11,7 +11,11 @@ from datetime import datetime
 from decimal import Decimal
 import structlog
 
-from playwright.async_api import BrowserContext, Page
+try:
+    from playwright.async_api import BrowserContext, Page
+except ImportError:
+    BrowserContext = None
+    Page = None
 
 
 @dataclass

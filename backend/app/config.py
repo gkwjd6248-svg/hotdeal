@@ -1,6 +1,7 @@
 """Application configuration via Pydantic Settings."""
 
 from typing import List
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +16,16 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://dealhawk:dealhawk_dev@localhost:5432/dealhawk"
+
+    @model_validator(mode="after")
+    def fix_database_url(self) -> "Settings":
+        """Railway provides postgresql:// but asyncpg needs postgresql+asyncpg://"""
+        url = self.DATABASE_URL
+        if url.startswith("postgresql://"):
+            self.DATABASE_URL = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            self.DATABASE_URL = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        return self
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

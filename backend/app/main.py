@@ -204,6 +204,23 @@ app.add_middleware(
 app.include_router(api_v1_router, prefix="/api/v1")
 
 
+# Debug exception handler to show actual errors
+if settings.DEBUG:
+    from fastapi.responses import JSONResponse
+    from fastapi import Request
+    import traceback
+
+    @app.exception_handler(Exception)
+    async def debug_exception_handler(request: Request, exc: Exception):
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": str(exc),
+                "traceback": traceback.format_exc(),
+            },
+        )
+
+
 @app.get("/")
 async def root():
     """Root endpoint with API information."""

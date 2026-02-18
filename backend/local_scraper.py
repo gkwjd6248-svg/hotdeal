@@ -236,6 +236,30 @@ async def _create_browser_context(
 # ---------------------------------------------------------------------------
 
 
+BATCH_SIZE = 50  # Max deals per ingest request (avoids Render free-tier timeouts)
+
+
+async def _post_batch(
+    deals_batch: List[Dict[str, Any]],
+    shop_slug: str,
+    url: str,
+    api_key: str,
+    http_client: httpx.AsyncClient,
+) -> Dict[str, Any]:
+    """POST a single batch of deals. Returns raw stats dict or error."""
+    payload = {"api_key": api_key, "shop_slug": shop_slug, "deals": deals_batch}
+    headers = {"Content-Type": "application/json"}
+
+    response = await http_client.post(
+        url,
+        content=json.dumps(payload, default=_decimal_default),
+        headers=headers,
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    return response.json().get("stats", {})
+
+
 async def post_deals_to_backend(
     deals: List[Dict[str, Any]],
     shop_slug: str,
@@ -243,27 +267,10 @@ async def post_deals_to_backend(
     api_key: str,
     http_client: httpx.AsyncClient,
 ) -> Dict[str, Any]:
-    """POST scraped deals to the backend ingest endpoint.
+    """POST scraped deals in batches to the backend ingest endpoint.
 
-    The backend expects IngestRequest JSON:
-      {
-        "api_key": "<key>",
-        "shop_slug": "<slug>",
-        "deals": [...]
-      }
-
-    On success the backend returns IngestResponse:
-      {
-        "status": "success",
-        "stats": {
-          "received": N,
-          "products_created": N,
-          "products_updated": N,
-          "deals_created": N,
-          "deals_skipped": N,
-          "errors": N
-        }
-      }
+    Large batches are split into chunks of BATCH_SIZE to avoid timeouts
+    on Render's free tier. Stats from each chunk are aggregated.
 
     Args:
         deals: List of deal dicts (output of deal_to_dict).
@@ -273,54 +280,50 @@ async def post_deals_to_backend(
         http_client: Shared httpx AsyncClient.
 
     Returns:
-        Dict with keys "sent", "accepted", "rejected", "error".
+        Dict with keys "sent", "accepted", "rejected", "error", "stats".
     """
     url = backend_url.rstrip("/") + INGEST_ENDPOINT
 
-    # Payload matches IngestRequest schema in app/schemas/ingest.py
-    payload = {
-        "api_key": api_key,
-        "shop_slug": shop_slug,
-        "deals": deals,
+    # Aggregate stats across all batches
+    agg_stats: Dict[str, int] = {
+        "received": 0,
+        "products_created": 0,
+        "products_updated": 0,
+        "deals_created": 0,
+        "deals_skipped": 0,
+        "errors": 0,
     }
+    errors: List[str] = []
+    total_batches = (len(deals) + BATCH_SIZE - 1) // BATCH_SIZE
 
-    headers = {"Content-Type": "application/json"}
+    for i in range(0, len(deals), BATCH_SIZE):
+        batch = deals[i : i + BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
 
-    try:
-        response = await http_client.post(
-            url,
-            content=json.dumps(payload, default=_decimal_default),
-            headers=headers,
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        # Parse IngestResponse.stats
-        stats = data.get("stats", {})
-        accepted = stats.get("deals_created", 0) + stats.get("products_created", 0)
-        rejected = stats.get("deals_skipped", 0) + stats.get("errors", 0)
-        return {
-            "sent": len(deals),
-            "accepted": accepted,
-            "rejected": rejected,
-            "error": None,
-            "stats": stats,
-        }
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:300]
-        return {
-            "sent": len(deals),
-            "accepted": 0,
-            "rejected": len(deals),
-            "error": f"HTTP {exc.response.status_code}: {body}",
-        }
-    except Exception as exc:
-        return {
-            "sent": len(deals),
-            "accepted": 0,
-            "rejected": len(deals),
-            "error": str(exc),
-        }
+        if total_batches > 1:
+            print(f"  [{shop_slug}] 배치 {batch_num}/{total_batches} ({len(batch)}개)")
+
+        try:
+            stats = await _post_batch(batch, shop_slug, url, api_key, http_client)
+            for key in agg_stats:
+                agg_stats[key] += stats.get(key, 0)
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:300]
+            errors.append(f"배치 {batch_num}: HTTP {exc.response.status_code}: {body}")
+        except Exception as exc:
+            errors.append(f"배치 {batch_num}: {exc}")
+
+    accepted = agg_stats["deals_created"] + agg_stats["products_created"]
+    rejected = agg_stats["deals_skipped"] + agg_stats["errors"]
+    error_msg = "; ".join(errors) if errors else None
+
+    return {
+        "sent": len(deals),
+        "accepted": accepted,
+        "rejected": rejected,
+        "error": error_msg,
+        "stats": agg_stats,
+    }
 
 
 # ---------------------------------------------------------------------------

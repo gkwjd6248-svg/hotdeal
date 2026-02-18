@@ -4,13 +4,39 @@ import { Deal } from "@/lib/types";
 import PriceDisplay from "@/components/common/PriceDisplay";
 import RelativeTime from "@/components/common/RelativeTime";
 import ShopLogo from "@/components/common/ShopLogo";
-import { Eye, ThumbsUp, MessageCircle } from "lucide-react";
+import { Eye, ThumbsUp, MessageCircle, Sparkles, Tag } from "lucide-react";
 
 interface DealCardProps {
   deal: Deal;
+  featured?: boolean;
 }
 
-export default function DealCard({ deal }: DealCardProps) {
+function AiScoreBadge({ score }: { score: number }) {
+  if (score >= 80) {
+    return (
+      <span className="ai-score-badge-high">
+        <Sparkles className="h-2.5 w-2.5" />
+        {score}
+      </span>
+    );
+  }
+  if (score >= 50) {
+    return (
+      <span className="ai-score-badge-medium">
+        <Sparkles className="h-2.5 w-2.5" />
+        {score}
+      </span>
+    );
+  }
+  return (
+    <span className="ai-score-badge-low">
+      <Sparkles className="h-2.5 w-2.5" />
+      {score}
+    </span>
+  );
+}
+
+export default function DealCard({ deal, featured = false }: DealCardProps) {
   const discountPercentage =
     deal.discount_percentage ??
     (deal.original_price && deal.original_price > deal.deal_price
@@ -19,9 +45,11 @@ export default function DealCard({ deal }: DealCardProps) {
         )
       : null);
 
+  const cardClass = featured ? "deal-card-featured" : "deal-card";
+
   return (
     <Link href={`/deals/${deal.id}`} className="group block">
-      <article className="deal-card relative h-full overflow-hidden">
+      <article className={`${cardClass} relative h-full overflow-hidden`}>
         {/* Image container */}
         <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-lg bg-surface">
           {deal.image_url ? (
@@ -29,14 +57,17 @@ export default function DealCard({ deal }: DealCardProps) {
               src={deal.image_url}
               alt={deal.title}
               fill
-              className="object-cover transition-transform duration-300 group-hover:scale-105"
+              className="object-cover transition-transform duration-500 group-hover:scale-[1.08]"
               sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, (max-width: 1440px) 33vw, 25vw"
             />
           ) : (
-            <div className="flex h-full items-center justify-center">
-              <span className="text-4xl text-gray-600">🏷️</span>
+            <div className="flex h-full items-center justify-center bg-gradient-to-br from-surface to-card-hover">
+              <Tag className="h-10 w-10 text-gray-600" />
             </div>
           )}
+
+          {/* Gradient overlay on hover */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
 
           {/* Shop logo badge - top left */}
           <div className="absolute left-2 top-2">
@@ -46,7 +77,7 @@ export default function DealCard({ deal }: DealCardProps) {
           {/* Discount badge - top right */}
           {discountPercentage && discountPercentage > 0 && (
             <div className="absolute right-2 top-2">
-              <div className="rounded-full bg-price-discount px-2.5 py-1 text-xs font-bold text-white shadow-lg">
+              <div className="discount-badge-prominent">
                 -{discountPercentage}%
               </div>
             </div>
@@ -56,7 +87,7 @@ export default function DealCard({ deal }: DealCardProps) {
         {/* Content */}
         <div className="flex flex-col gap-2">
           {/* Title - max 2 lines */}
-          <h3 className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-tight text-gray-200">
+          <h3 className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-tight text-gray-200 transition-colors group-hover:text-white">
             {deal.title}
           </h3>
 
@@ -69,47 +100,31 @@ export default function DealCard({ deal }: DealCardProps) {
             size="md"
           />
 
-          {/* Meta info */}
+          {/* Meta info row */}
           <div className="flex items-center justify-between border-t border-border/50 pt-2 text-xs text-gray-400">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-300">{deal.shop.name}</span>
-              <span>•</span>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="font-medium text-gray-300 truncate">{deal.shop.name}</span>
+              <span className="flex-shrink-0">·</span>
               <RelativeTime date={deal.created_at} />
             </div>
 
-            {/* AI Score */}
+            {/* AI Score Badge */}
             {deal.ai_score !== null && deal.ai_score > 0 && (
-              <div className="flex items-center gap-1">
-                <div
-                  className="h-1.5 w-12 rounded-full bg-surface"
-                  role="progressbar"
-                  aria-valuenow={deal.ai_score}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <div
-                    className="h-full rounded-full bg-accent transition-all"
-                    style={{ width: `${deal.ai_score}%` }}
-                  />
-                </div>
-                <span className="text-xs font-medium text-accent">
-                  AI {deal.ai_score}
-                </span>
-              </div>
+              <AiScoreBadge score={deal.ai_score} />
             )}
           </div>
 
           {/* Stats row */}
           <div className="flex items-center gap-3 text-xs text-gray-500">
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 hover:text-gray-400 transition-colors">
               <Eye className="h-3 w-3" />
               <span>{deal.view_count.toLocaleString()}</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 hover:text-gray-400 transition-colors">
               <ThumbsUp className="h-3 w-3" />
               <span>{deal.vote_up.toLocaleString()}</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 hover:text-gray-400 transition-colors">
               <MessageCircle className="h-3 w-3" />
               <span>{deal.comment_count.toLocaleString()}</span>
             </div>

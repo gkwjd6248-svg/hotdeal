@@ -4,6 +4,7 @@ import DealCardSkeleton from "@/components/deals/DealCardSkeleton";
 import ShopFilter from "@/components/navigation/ShopFilter";
 import SortDropdown from "@/components/navigation/SortDropdown";
 import { ApiResponse, Deal } from "@/lib/types";
+import { LayoutGrid } from "lucide-react";
 
 const API_BASE = process.env.BACKEND_URL || "http://localhost:8000";
 
@@ -23,7 +24,7 @@ async function getDealsMetadata(params: {
 }): Promise<{ total: number; categoryName: string }> {
   try {
     const qs = new URLSearchParams();
-    qs.set("limit", "1"); // We only need meta.total
+    qs.set("limit", "1");
     if (params.category && params.category !== "all") {
       qs.set("category", params.category);
     }
@@ -41,7 +42,6 @@ async function getDealsMetadata(params: {
     const json: ApiResponse<Deal[]> = await res.json();
     const total = json.meta?.total ?? 0;
 
-    // Fetch category name if filtering
     let categoryName = "전체";
     if (params.category && params.category !== "all") {
       try {
@@ -60,7 +60,6 @@ async function getDealsMetadata(params: {
           if (matched) categoryName = matched.name;
         }
       } catch {
-        // Use slug as fallback
         categoryName = params.category;
       }
     }
@@ -83,27 +82,46 @@ function DealsGridSkeleton() {
 
 export default async function DealsPage({ searchParams }: DealsPageProps) {
   const { total, categoryName } = await getDealsMetadata(searchParams);
+  const isFiltered = Boolean(searchParams.category || searchParams.shop);
 
   return (
     <div className="min-h-screen">
       <ShopFilter />
 
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
-        <div className="mb-6 flex items-center justify-between">
+        {/* Page header */}
+        <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-white">
-              {categoryName} 특가
-            </h1>
-            {total > 0 && (
-              <p className="mt-1 text-sm text-gray-400">
-                {total.toLocaleString()}개의 특가 상품
-              </p>
-            )}
+            <div className="flex items-center gap-2">
+              <LayoutGrid className="h-5 w-5 text-accent" />
+              <h1 className="text-xl font-bold text-white sm:text-2xl">
+                {categoryName}{" "}
+                <span className="text-accent">특가</span>
+              </h1>
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-sm text-gray-400">
+              {total > 0 ? (
+                <span>
+                  총{" "}
+                  <span className="font-semibold text-gray-300">
+                    {total.toLocaleString()}
+                  </span>
+                  개 상품
+                </span>
+              ) : (
+                <span>검색 중...</span>
+              )}
+              {isFiltered && (
+                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+                  필터 적용됨
+                </span>
+              )}
+            </div>
           </div>
           <SortDropdown />
         </div>
 
-        {/* Client-side infinite scroll grid — reads URL params reactively */}
+        {/* Client-side infinite scroll grid */}
         <Suspense fallback={<DealsGridSkeleton />}>
           <InfiniteDealGrid />
         </Suspense>

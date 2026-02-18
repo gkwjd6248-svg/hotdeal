@@ -49,6 +49,7 @@ const config: Config = {
         "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
         "slide-up": "slideUp 0.3s ease-out",
         "fade-in": "fadeIn 0.2s ease-out",
+        shimmer: "shimmer 1.8s infinite",
       },
       keyframes: {
         slideUp: {
@@ -56,8 +57,12 @@ const config: Config = {
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
         fadeIn: {
-          "0%": { opacity: "0" },
-          "100%": { opacity: "1" },
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        shimmer: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
         },
       },
     },

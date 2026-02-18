@@ -8,7 +8,6 @@ import re
 import httpx
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
-from datetime import datetime
 
 import structlog
 from tenacity import (
@@ -42,43 +41,59 @@ class NaverShoppingAdapter(BaseAPIAdapter):
     API_BASE_URL = "https://openapi.naver.com/v1/search/shop.json"
     API_DOMAIN = "openapi.naver.com"
 
-    # Category-specific search keywords
+    # Category-specific search keywords.
+    # Each list has broader terms first (more results) and specific ones after.
+    # Naver Shopping API works well with Korean product names + deal terms.
     CATEGORY_KEYWORDS = {
         "pc-hardware": [
-            "그래픽카드 특가",
-            "SSD 할인",
-            "CPU 특가",
-            "RAM DDR5 할인",
-            "메인보드 특가",
+            "그래픽카드 할인",
+            "SSD 특가",
+            "CPU 할인",
+            "RAM 특가",
+            "메인보드 할인",
         ],
         "laptop-mobile": [
-            "노트북 특가",
-            "스마트폰 할인",
-            "태블릿 특가",
-            "갤럭시 할인",
+            "노트북 할인",
+            "스마트폰 특가",
+            "태블릿 할인",
+            "갤럭시 특가",
+            "아이폰 할인",
         ],
         "electronics-tv": [
-            "TV 특가",
-            "모니터 할인",
-            "세탁기 특가",
-            "에어컨 할인",
+            "TV 할인",
+            "모니터 특가",
+            "세탁기 할인",
             "냉장고 특가",
+            "에어컨 할인",
         ],
         "games-software": [
-            "게임 특가",
-            "PS5 할인",
-            "닌텐도 특가",
+            "게임 할인",
+            "PS5 특가",
+            "닌텐도 스위치 할인",
+            "Xbox 특가",
         ],
         "gift-cards": [
             "상품권 할인",
             "기프트카드 특가",
+            "문화상품권 할인",
         ],
         "living-food": [
-            "식품 특가",
-            "생활용품 할인",
-            "건강식품 특가",
+            "식품 할인",
+            "생활용품 특가",
+            "건강식품 할인",
+            "다이어트 특가",
         ],
     }
+
+    # General deal keywords searched regardless of category.
+    # These cast a wider net to capture cross-category hot deals.
+    GENERAL_KEYWORDS = [
+        "오늘의특가",
+        "타임특가",
+        "반값특가",
+        "핫딜",
+        "특가세일",
+    ]
 
     def __init__(self):
         """Initialize Naver Shopping adapter."""
@@ -110,23 +125,27 @@ class NaverShoppingAdapter(BaseAPIAdapter):
                      If None, fetches deals from all categories.
 
         Returns:
-            List of NormalizedDeal objects
-
-        Raises:
-            Exception: If API credentials are missing or API call fails
+            List of NormalizedDeal objects. Returns empty list if credentials
+            are missing (logs warning instead of raising).
         """
         if not self.client_id or not self.client_secret:
-            raise ValueError(
-                "Naver API credentials not configured. "
-                "Set NAVER_CLIENT_ID and NAVER_CLIENT_SECRET in .env file."
+            logger.warning(
+                "naver_fetch_skipped",
+                message=(
+                    "NAVER_CLIENT_ID or NAVER_CLIENT_SECRET not configured. "
+                    "Set these environment variables on Render to enable Naver scraping."
+                ),
             )
+            return []
 
         deals: List[NormalizedDeal] = []
         seen_product_ids = set()  # For deduplication
 
-        # Determine which keywords to search
+        # Determine which category keywords to search
         if category and category in self.CATEGORY_KEYWORDS:
             keyword_groups = {category: self.CATEGORY_KEYWORDS[category]}
+            # When filtering by category, skip general keywords
+            general_keywords = []
         elif category:
             logger.warning(
                 "unknown_category",
@@ -134,54 +153,69 @@ class NaverShoppingAdapter(BaseAPIAdapter):
                 message="Category not found in keyword map, searching all categories",
             )
             keyword_groups = self.CATEGORY_KEYWORDS
+            general_keywords = self.GENERAL_KEYWORDS
         else:
             keyword_groups = self.CATEGORY_KEYWORDS
+            general_keywords = self.GENERAL_KEYWORDS
 
-        # Search for each keyword
+        async def _search_and_collect(
+            keyword: str,
+            cat_slug: str,
+            sort: str = "sim",
+        ) -> None:
+            """Search a keyword and add results to deals list."""
+            try:
+                logger.info(
+                    "searching_naver",
+                    category=cat_slug,
+                    keyword=keyword,
+                )
+
+                results = await self._call_api(
+                    query=keyword,
+                    display=30,  # Get top 30 results per keyword
+                    sort=sort,
+                )
+
+                for item in results.get("items", []):
+                    product_id = item.get("productId")
+
+                    # Skip items with no product ID (mall-level items)
+                    if not product_id:
+                        continue
+
+                    # Skip if already processed (deduplication)
+                    if product_id in seen_product_ids:
+                        continue
+
+                    try:
+                        deal = self._normalize_item(item, category_hint=cat_slug)
+                        if deal:
+                            deals.append(deal)
+                            seen_product_ids.add(product_id)
+                    except Exception as e:
+                        logger.error(
+                            "normalization_failed",
+                            product_id=product_id,
+                            error=str(e),
+                        )
+
+            except Exception as e:
+                logger.error(
+                    "keyword_search_failed",
+                    keyword=keyword,
+                    error=str(e),
+                )
+                # Continue with next keyword even if one fails
+
+        # Search category-specific keywords (sorted by relevance)
         for cat_slug, keywords in keyword_groups.items():
             for keyword in keywords:
-                try:
-                    logger.info(
-                        "searching_naver",
-                        category=cat_slug,
-                        keyword=keyword,
-                    )
+                await _search_and_collect(keyword, cat_slug, sort="sim")
 
-                    # Fetch results for this keyword
-                    results = await self._call_api(
-                        query=keyword,
-                        display=30,  # Get top 30 results per keyword
-                        sort="date",  # Sort by newest first (recent deals)
-                    )
-
-                    # Normalize each item
-                    for item in results.get("items", []):
-                        product_id = item.get("productId")
-
-                        # Skip if already processed (deduplication)
-                        if product_id in seen_product_ids:
-                            continue
-
-                        # Normalize and add deal
-                        try:
-                            deal = self._normalize_item(item, category_hint=cat_slug)
-                            if deal:
-                                deals.append(deal)
-                                seen_product_ids.add(product_id)
-                        except Exception as e:
-                            logger.error(
-                                "normalization_failed",
-                                product_id=product_id,
-                                error=str(e),
-                            )
-
-                except Exception as e:
-                    logger.error(
-                        "keyword_search_failed",
-                        keyword=keyword,
-                        error=str(e),
-                    )
-                    # Continue with next keyword even if one fails
+        # Search general hot-deal keywords (sorted by relevance)
+        for keyword in general_keywords:
+            await _search_and_collect(keyword, "general", sort="sim")
 
         logger.info(
             "naver_fetch_complete",
@@ -263,11 +297,18 @@ class NaverShoppingAdapter(BaseAPIAdapter):
         """Check if Naver API is accessible and credentials are valid.
 
         Returns:
-            True if healthy, False otherwise
+            True if healthy, False if credentials are missing or API is unreachable
         """
+        if not self.client_id or not self.client_secret:
+            logger.warning(
+                "naver_health_check_skipped",
+                message="Credentials not configured, marking as unhealthy",
+            )
+            return False
+
         try:
             # Make a simple API call with a generic search term
-            await self._call_api(query="테스트", display=1)
+            await self._call_api(query="특가", display=1)
             logger.info("naver_health_check_passed")
             return True
         except Exception as e:
@@ -421,12 +462,13 @@ class NaverShoppingAdapter(BaseAPIAdapter):
             # Even without explicit discount, it's still a deal from search
             deal_type = "price_drop"
 
-        # Auto-classify category
+        # Auto-classify category using title keywords first,
+        # then fall back to the search keyword's category hint.
+        # Exclude "general" as it's not a real DB category slug.
         classified_category = CategoryClassifier.classify(
             title, shop_category=item.get("category1")
         )
-        # Use category hint from search keyword if classification fails
-        if not classified_category:
+        if not classified_category and category_hint and category_hint != "general":
             classified_category = category_hint
 
         # Create product

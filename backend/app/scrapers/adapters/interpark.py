@@ -1,8 +1,10 @@
 """Interpark (인터파크) scraper adapter.
 
 Scrapes deals from Interpark's special deal section.
+Uses multiple URL strategies and multi-strategy parsing.
 """
 
+import re
 from decimal import Decimal
 from typing import List, Optional
 
@@ -25,167 +27,215 @@ from app.scrapers.utils.normalizer import PriceNormalizer, CategoryClassifier
 
 logger = structlog.get_logger()
 
+_DEAL_URLS = [
+    "https://www.interpark.com/malls/index.html",
+    "https://www.interpark.com/best",
+    "https://m.interpark.com/malls/index.html",
+]
+
+_CARD_SELECTORS = [
+    ".prd_item",
+    ".deal_item",
+    ".product_item",
+    "li[class*='item']",
+    "[class*='product']",
+]
+
+_WAIT_SELECTOR = ", ".join([
+    ".prd_item",
+    ".deal_item",
+    "[class*='item']",
+    "a[href*='prdNo']",
+])
+
 
 class InterparkAdapter(BaseScraperAdapter):
     """Interpark special deal scraper adapter."""
 
     shop_slug = "interpark"
     shop_name = "인터파크"
-
-    DEALS_URL = "https://www.interpark.com/malls/index.html"
-    WAIT_SELECTOR = ".prd_item, .deal_item, .product_item"
-    RATE_LIMIT_RPM = 10
+    RATE_LIMIT_RPM = 15
 
     def __init__(self):
-        """Initialize Interpark adapter."""
         super().__init__()
         self.logger = logger.bind(adapter=self.shop_slug)
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=2, min=3, max=15),
         retry=retry_if_exception_type(Exception),
     )
     async def fetch_deals(self, category: Optional[str] = None) -> List[NormalizedDeal]:
-        """Fetch current deals from Interpark.
-
-        Args:
-            category: Optional category filter (not used for Interpark)
-
-        Returns:
-            List of NormalizedDeal objects
-
-        Raises:
-            AdapterError: If scraping fails after retries
-        """
+        """Fetch current deals from Interpark."""
         context = await self._get_browser_context()
-        page = await context.new_page()
 
-        try:
-            self.logger.info("fetching_interpark_deals", url=self.DEALS_URL)
+        all_deals: List[NormalizedDeal] = []
+        seen_ids: set = set()
 
-            # Scrape the deals page
-            html = await self._safe_scrape(page, self.DEALS_URL, self.WAIT_SELECTOR)
-            soup = BeautifulSoup(html, "html.parser")
+        all_urls = list(_DEAL_URLS) + ["https://www.interpark.com"]
 
-            deals = []
-            seen_ids = set()
-
-            # Parse product cards - multiple selector strategies
-            deal_cards = (
-                soup.select(".prd_item") or
-                soup.select(".deal_item") or
-                soup.select(".product_item")
-            )
-
-            self.logger.info("found_deal_cards", count=len(deal_cards))
-
-            for card in deal_cards:
+        for url in all_urls:
+            page = await context.new_page()
+            try:
+                self.logger.info("trying_interpark_url", url=url)
+                html = await self._safe_scrape(
+                    page, url, _WAIT_SELECTOR,
+                    scroll=True, wait_seconds=3.0,
+                )
+                deals = self._parse_deals_from_html(html, seen_ids)
+                if deals:
+                    all_deals.extend(deals)
+                    self.logger.info("interpark_deals_found", url=url, count=len(deals))
+                    break
+                else:
+                    self.logger.warning("no_deals_at_url", url=url)
+            except Exception as e:
+                self.logger.warning("interpark_url_failed", url=url, error=str(e))
+            finally:
                 try:
-                    deal = self._parse_deal_card(card)
-                    if deal and deal.product.external_id not in seen_ids:
-                        deals.append(deal)
-                        seen_ids.add(deal.product.external_id)
-                except Exception as e:
-                    self.logger.warning("failed_to_parse_deal_card", error=str(e))
-                    continue
+                    await page.close()
+                except Exception:
+                    pass
 
-            self.logger.info("fetched_interpark_deals", count=len(deals))
+        self.logger.info("fetched_interpark_deals_total", count=len(all_deals))
+        return all_deals
+
+    def _extract_interpark_id(self, href: str) -> Optional[str]:
+        """Extract Interpark product ID from various URL formats."""
+        m = re.search(r"prdNo=([A-Za-z0-9]+)", href)
+        if m:
+            return m.group(1)
+        m = re.search(r"/product/([A-Za-z0-9]+)", href)
+        if m:
+            return m.group(1)
+        m = re.search(r"/goods/([A-Za-z0-9]+)", href)
+        if m:
+            return m.group(1)
+        return None
+
+    def _parse_deals_from_html(self, html: str, seen_ids: set) -> List[NormalizedDeal]:
+        """Parse deals from raw HTML using multiple strategies."""
+        soup = BeautifulSoup(html, "html.parser")
+        deals = []
+
+        # Strategy 1: Find all product links
+        product_links = soup.select(
+            "a[href*='prdNo='], a[href*='/product/'], a[href*='/goods/']"
+        )
+        self.logger.info("interpark_product_links_found", count=len(product_links))
+
+        for link in product_links:
+            deal = self._parse_from_link(link, seen_ids)
+            if deal:
+                deals.append(deal)
+                seen_ids.add(deal.product.external_id)
+
+        if deals:
             return deals
 
-        finally:
-            await page.close()
+        # Strategy 2: card containers
+        for selector in _CARD_SELECTORS:
+            cards = soup.select(selector)
+            if not cards:
+                continue
+            self.logger.info("trying_card_selector", selector=selector, count=len(cards))
+            for card in cards:
+                deal = self._parse_deal_card(card, seen_ids)
+                if deal:
+                    deals.append(deal)
+                    seen_ids.add(deal.product.external_id)
+            if deals:
+                break
 
-    def _parse_deal_card(self, card) -> Optional[NormalizedDeal]:
-        """Parse a deal card element into NormalizedDeal.
+        return deals
 
-        Args:
-            card: BeautifulSoup element representing a deal card
-
-        Returns:
-            NormalizedDeal or None if parsing fails
-        """
+    def _parse_from_link(self, link_elem, seen_ids: set) -> Optional[NormalizedDeal]:
+        """Parse a deal from a product link element."""
         try:
-            # Extract product link and ID
-            link_elem = card.select_one("a[href*='prdNo'], a[href*='/product/']")
-            if not link_elem or not link_elem.get("href"):
+            href = link_elem.get("href", "")
+            if not href:
                 return None
 
-            product_url = link_elem["href"]
+            external_id = self._extract_interpark_id(href)
+            if not external_id or external_id in seen_ids:
+                return None
+
+            product_url = href
             if not product_url.startswith("http"):
                 product_url = f"https://www.interpark.com{product_url}"
 
-            # Extract product ID from URL (prdNo parameter or path)
-            import re
-            id_match = re.search(r"prdNo=(\d+)", product_url) or re.search(r"/product/(\d+)", product_url)
-            if not id_match:
-                return None
-            external_id = id_match.group(1)
-
-            # Extract title
-            title_elem = (
-                card.select_one(".prd_name") or
-                card.select_one(".product_name a") or
-                card.select_one(".title")
-            )
-            if not title_elem:
-                return None
-            title = title_elem.get_text(strip=True)
-
-            # Extract current price
-            price_elem = (
-                card.select_one(".prd_price strong") or
-                card.select_one(".sale_price em") or
-                card.select_one(".price strong")
-            )
-            if not price_elem:
-                return None
-
-            price_text = price_elem.get_text(strip=True)
-            current_price = PriceNormalizer.clean_price_string(price_text)
-            if not current_price or current_price <= 0:
-                return None
-
-            # Extract original price (optional)
+            container = link_elem
+            title = None
+            current_price = None
             original_price = None
-            original_elem = (
-                card.select_one(".org_price") or
-                card.select_one(".original_price del") or
-                card.select_one(".price del")
-            )
-            if original_elem:
-                original_text = original_elem.get_text(strip=True)
-                original_price = PriceNormalizer.clean_price_string(original_text)
-
-            # Extract discount percentage (optional)
             discount_pct = None
-            discount_elem = (
-                card.select_one(".discount_rate") or
-                card.select_one(".sale_rate") or
-                card.select_one(".rate em")
-            )
-            if discount_elem:
-                discount_text = discount_elem.get_text(strip=True)
-                discount_match = re.search(r"(\d+)%", discount_text)
-                if discount_match:
-                    discount_pct = Decimal(discount_match.group(1))
+            image_url = None
 
-            # Calculate discount if we have both prices but no explicit discount
+            for sel in ["[class*='name']", "[class*='title']", "[class*='tit']", "[class*='text']"]:
+                elem = container.select_one(sel)
+                if elem:
+                    text = elem.get_text(strip=True)
+                    if text and len(text) > 5 and not re.match(r'^[\d,%원]+$', text):
+                        title = text
+                        break
+
+            for sel in [
+                "[class*='price'] strong", "[class*='price'] em",
+                "[class*='sale'] strong", "[class*='price']",
+            ]:
+                for elem in container.select(sel):
+                    text = elem.get_text(strip=True)
+                    price = PriceNormalizer.clean_price_string(text)
+                    if price and 100 < price < 100_000_000:
+                        current_price = price
+                        break
+                if current_price:
+                    break
+
+            for sel in ["del", "s", "[class*='org']", "[class*='origin']", "[class*='before']"]:
+                elem = container.select_one(sel)
+                if elem:
+                    text = elem.get_text(strip=True)
+                    price = PriceNormalizer.clean_price_string(text)
+                    if price and price > (current_price or 0):
+                        original_price = price
+                        break
+
+            for sel in ["[class*='discount']", "[class*='rate']", "[class*='percent']"]:
+                elem = container.select_one(sel)
+                if elem:
+                    text = elem.get_text(strip=True)
+                    m = re.search(r"(\d+)\s*%", text)
+                    if m:
+                        discount_pct = Decimal(m.group(1))
+                        break
+
+            if not title or not current_price:
+                flat_text = container.get_text(strip=True)
+                title, current_price, original_price, discount_pct = (
+                    self._parse_from_flat_text(flat_text, title, current_price, original_price, discount_pct)
+                )
+
+            if not title or not current_price:
+                return None
+
+            title = re.sub(r'^\d{1,3}(?=[가-힣A-Za-z\[\(])', '', title).strip()
+            if len(title) < 3:
+                return None
+
             if not discount_pct and original_price and original_price > current_price:
                 discount_pct = self._calculate_discount_percentage(original_price, current_price)
 
-            # Extract image URL
-            image_url = None
-            img_elem = card.select_one("img")
-            if img_elem:
-                image_url = img_elem.get("src") or img_elem.get("data-src") or img_elem.get("data-original")
-                if image_url and not image_url.startswith("http"):
-                    image_url = f"https:{image_url}" if image_url.startswith("//") else f"https://www.interpark.com{image_url}"
+            img = container.select_one("img")
+            if img:
+                image_url = img.get("src") or img.get("data-src") or img.get("data-original")
+                if image_url and image_url.startswith("//"):
+                    image_url = f"https:{image_url}"
+                elif image_url and not image_url.startswith("http"):
+                    image_url = None
 
-            # Auto-categorize
             category_hint = CategoryClassifier.classify(title)
 
-            # Create normalized product
             product = NormalizedProduct(
                 external_id=external_id,
                 title=title,
@@ -195,11 +245,10 @@ class InterparkAdapter(BaseScraperAdapter):
                 currency="KRW",
                 image_url=image_url,
                 category_hint=category_hint,
-                metadata={"source": "deal"}
+                metadata={"source": "deal"},
             )
 
-            # Create normalized deal
-            deal = NormalizedDeal(
+            return NormalizedDeal(
                 product=product,
                 deal_price=current_price,
                 title=title,
@@ -208,83 +257,124 @@ class InterparkAdapter(BaseScraperAdapter):
                 discount_percentage=discount_pct,
                 deal_type="price_drop",
                 image_url=image_url,
-                metadata={"source": "deal", "shop": self.shop_name}
+                metadata={"source": "deal", "shop": self.shop_name},
             )
 
-            return deal
-
         except Exception as e:
-            self.logger.warning("parse_deal_card_failed", error=str(e))
+            self.logger.debug("parse_from_link_failed", error=str(e))
             return None
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(Exception),
-    )
-    async def fetch_product_details(self, external_id: str) -> Optional[NormalizedProduct]:
-        """Fetch detailed information for a specific product.
+    def _parse_from_flat_text(
+        self, text: str,
+        existing_title: Optional[str],
+        existing_price: Optional[Decimal],
+        existing_original: Optional[Decimal],
+        existing_discount: Optional[Decimal],
+    ):
+        """Extract title, prices, and discount from a combined text string."""
+        if not text:
+            return existing_title, existing_price, existing_original, existing_discount
 
-        Args:
-            external_id: Interpark product ID (prdNo)
+        discount = existing_discount
+        if not discount:
+            m = re.search(r'(\d{1,2})\s*%', text)
+            if m:
+                discount = Decimal(m.group(1))
 
-        Returns:
-            NormalizedProduct or None if not found
-        """
-        context = await self._get_browser_context()
-        page = await context.new_page()
+        price_pattern = r'(\d{1,3}(?:,\d{3})+)'
+        price_matches = re.findall(price_pattern, text)
+        prices = []
+        for pm in price_matches:
+            val = Decimal(pm.replace(',', ''))
+            if 100 < val < 100_000_000:
+                prices.append(val)
 
+        current_price = existing_price
+        original_price = existing_original
+
+        if not current_price and prices:
+            if len(prices) >= 2:
+                original_price = max(prices[:2])
+                current_price = min(prices[:2])
+            else:
+                current_price = prices[0]
+
+        title = existing_title
+        if not title:
+            cleaned = re.sub(r'\d{1,3}(,\d{3})+', '', text)
+            cleaned = re.sub(r'\d+%할인', '', cleaned)
+            cleaned = re.sub(r'(판매가|정상가|할인|원)', '', cleaned)
+            cleaned = re.sub(r'^\d{1,3}\s*', '', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            if len(cleaned) > 5:
+                title = cleaned
+
+        return title, current_price, original_price, discount
+
+    def _parse_deal_card(self, card, seen_ids: set) -> Optional[NormalizedDeal]:
+        """Parse a generic card container."""
         try:
-            product_url = f"https://www.interpark.com/product/{external_id}"
-            self.logger.info("fetching_product_details", external_id=external_id, url=product_url)
-
-            html = await self._safe_scrape(page, product_url, ".prd_name, .product_title")
-            soup = BeautifulSoup(html, "html.parser")
-
-            # Extract title
-            title_elem = soup.select_one(".prd_name, .product_title h1")
-            if not title_elem:
-                return None
-            title = title_elem.get_text(strip=True)
-
-            # Extract current price
-            price_elem = soup.select_one(".prd_price strong, .sale_price em")
-            if not price_elem:
+            link_elem = card.select_one("a[href*='prdNo'], a[href*='/product/'], a[href*='/goods/']")
+            if not link_elem:
+                link_elem = card.select_one("a[href]")
+            if not link_elem:
                 return None
 
-            price_text = price_elem.get_text(strip=True)
-            current_price = PriceNormalizer.clean_price_string(price_text)
-            if not current_price or current_price <= 0:
+            href = link_elem.get("href", "")
+            external_id = self._extract_interpark_id(href)
+            if not external_id or external_id in seen_ids:
                 return None
 
-            # Extract original price
+            product_url = href
+            if not product_url.startswith("http"):
+                product_url = f"https://www.interpark.com{product_url}"
+
+            title_elem = (
+                card.select_one("[class*='name']") or
+                card.select_one("[class*='title']") or
+                card.select_one("span") or
+                link_elem
+            )
+            title = title_elem.get_text(strip=True) if title_elem else None
+            if not title or len(title) < 3:
+                return None
+
+            current_price = None
+            for sel in ["[class*='price'] strong", "[class*='sale'] strong", "[class*='price']", "strong", "em"]:
+                for elem in card.select(sel):
+                    text = elem.get_text(strip=True)
+                    price = PriceNormalizer.clean_price_string(text)
+                    if price and price > 100:
+                        current_price = price
+                        break
+                if current_price:
+                    break
+            if not current_price:
+                return None
+
             original_price = None
-            original_elem = soup.select_one(".org_price, .original_price del")
-            if original_elem:
-                original_text = original_elem.get_text(strip=True)
-                original_price = PriceNormalizer.clean_price_string(original_text)
+            for sel in ["del", "[class*='org']", "[class*='original']", "s"]:
+                elem = card.select_one(sel)
+                if elem:
+                    text = elem.get_text(strip=True)
+                    price = PriceNormalizer.clean_price_string(text)
+                    if price and price > current_price:
+                        original_price = price
+                        break
 
-            # Extract image
+            discount_pct = None
+            if original_price and original_price > current_price:
+                discount_pct = self._calculate_discount_percentage(original_price, current_price)
+
             image_url = None
-            img_elem = soup.select_one(".prd_img img, .product_img img")
-            if img_elem:
-                image_url = img_elem.get("src") or img_elem.get("data-src")
-                if image_url and not image_url.startswith("http"):
-                    image_url = f"https:{image_url}" if image_url.startswith("//") else None
+            img = card.select_one("img")
+            if img:
+                image_url = img.get("src") or img.get("data-src")
+                if image_url and image_url.startswith("//"):
+                    image_url = f"https:{image_url}"
+                elif image_url and not image_url.startswith("http"):
+                    image_url = None
 
-            # Extract brand (optional)
-            brand = None
-            brand_elem = soup.select_one(".brand_name, .seller_name")
-            if brand_elem:
-                brand = brand_elem.get_text(strip=True)
-
-            # Extract description snippet
-            description = None
-            desc_elem = soup.select_one(".prd_detail, .product_detail")
-            if desc_elem:
-                description = desc_elem.get_text(strip=True)[:500]  # Limit to 500 chars
-
-            # Auto-categorize
             category_hint = CategoryClassifier.classify(title)
 
             product = NormalizedProduct(
@@ -295,17 +385,81 @@ class InterparkAdapter(BaseScraperAdapter):
                 original_price=original_price,
                 currency="KRW",
                 image_url=image_url,
-                brand=brand,
                 category_hint=category_hint,
-                description=description,
-                metadata={"shop": self.shop_name}
+                metadata={"source": "deal"},
             )
 
-            return product
+            return NormalizedDeal(
+                product=product,
+                deal_price=current_price,
+                title=title,
+                deal_url=product_url,
+                original_price=original_price,
+                discount_percentage=discount_pct,
+                deal_type="price_drop",
+                image_url=image_url,
+                metadata={"source": "deal", "shop": self.shop_name},
+            )
+
+        except Exception as e:
+            self.logger.debug("parse_deal_card_failed", error=str(e))
+            return None
+
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(Exception),
+    )
+    async def fetch_product_details(self, external_id: str) -> Optional[NormalizedProduct]:
+        """Fetch detailed information for a specific product."""
+        context = await self._get_browser_context()
+        page = await context.new_page()
+
+        try:
+            product_url = f"https://www.interpark.com/product/{external_id}"
+            html = await self._safe_scrape(page, product_url, ".prd_name, .product_title")
+            soup = BeautifulSoup(html, "html.parser")
+
+            title_elem = soup.select_one(".prd_name, .product_title h1, h1")
+            if not title_elem:
+                return None
+            title = title_elem.get_text(strip=True)
+
+            price_elem = soup.select_one(".prd_price strong, .sale_price em, [class*='price'] strong")
+            if not price_elem:
+                return None
+            current_price = PriceNormalizer.clean_price_string(price_elem.get_text(strip=True))
+            if not current_price or current_price <= 0:
+                return None
+
+            original_price = None
+            original_elem = soup.select_one(".org_price, .original_price del, del")
+            if original_elem:
+                original_price = PriceNormalizer.clean_price_string(original_elem.get_text(strip=True))
+
+            image_url = None
+            img_elem = soup.select_one(".prd_img img, .product_img img, img[src*='image']")
+            if img_elem:
+                image_url = img_elem.get("src") or img_elem.get("data-src")
+                if image_url and image_url.startswith("//"):
+                    image_url = f"https:{image_url}"
+                elif image_url and not image_url.startswith("http"):
+                    image_url = None
+
+            return NormalizedProduct(
+                external_id=external_id,
+                title=title,
+                current_price=current_price,
+                product_url=product_url,
+                original_price=original_price,
+                currency="KRW",
+                image_url=image_url,
+                category_hint=CategoryClassifier.classify(title),
+                metadata={"shop": self.shop_name},
+            )
 
         except Exception as e:
             self.logger.error("fetch_product_details_failed", external_id=external_id, error=str(e))
             return None
-
         finally:
             await page.close()

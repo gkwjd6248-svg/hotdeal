@@ -391,14 +391,17 @@ async def scrape_shop(
             except Exception as exc:
                 log.warning("deal_conversion_failed", shop=shop_slug, error=str(exc))
 
-        # Dry run: print sample and return
+        # Dry run: print samples and return
         if dry_run:
-            print(f"[{shop_slug}] [DRY RUN] 백엔드 전송 건너뜀. 샘플 딜:")
-            if deal_dicts:
-                sample = deal_dicts[0]
-                print(f"  - 제목: {sample.get('title', 'N/A')}")
-                print(f"  - 가격: {sample.get('deal_price', 'N/A')}원")
-                print(f"  - URL : {sample.get('deal_url', 'N/A')}")
+            print(f"[{shop_slug}] [DRY RUN] 백엔드 전송 건너뜀. 딜 {len(deal_dicts)}개:")
+            for i, sample in enumerate(deal_dicts[:5]):
+                orig = sample.get('original_price')
+                pct = sample.get('discount_percentage')
+                print(f"  {i+1}. {sample.get('title', 'N/A')[:60]}")
+                print(f"     가격: {sample.get('deal_price', 'N/A'):,.0f}원"
+                      f"{f' (원래 {orig:,.0f}원, -{pct:.0f}%)' if orig and pct else ''}")
+            if len(deal_dicts) > 5:
+                print(f"  ... 외 {len(deal_dicts)-5}개")
             return ShopResult(
                 shop_slug=shop_slug,
                 deals_found=len(deals),

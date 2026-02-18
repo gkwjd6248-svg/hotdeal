@@ -186,14 +186,20 @@ class BaseScraperAdapter(BaseAdapter):
         )
 
     async def _safe_scrape(
-        self, page: Page, url: str, wait_selector: Optional[str] = None
+        self, page: Page, url: str, wait_selector: Optional[str] = None,
+        scroll: bool = True, wait_seconds: float = 2.0,
     ) -> str:
         """Scrape a URL with retry, rate limiting, and error handling.
+
+        Uses networkidle for JS-heavy SPAs, scrolls to trigger lazy loading,
+        and falls back gracefully if specific selectors aren't found.
 
         Args:
             page: Playwright Page instance
             url: URL to scrape
             wait_selector: Optional CSS selector to wait for before returning HTML
+            scroll: Whether to scroll down to trigger lazy loading
+            wait_seconds: Additional seconds to wait after page load
 
         Returns:
             HTML content as string
@@ -201,6 +207,8 @@ class BaseScraperAdapter(BaseAdapter):
         Raises:
             AdapterError: If scraping fails after retries
         """
+        import asyncio
+
         # Rate limiting
         if self.rate_limiter:
             from urllib.parse import urlparse
@@ -209,12 +217,36 @@ class BaseScraperAdapter(BaseAdapter):
 
         self.logger.info("scraping_url", url=url)
 
-        # Navigate to page
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # Navigate to page — try networkidle first, fall back to load
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=45000)
+        except Exception:
+            self.logger.warning("networkidle_timeout_fallback", url=url)
+            try:
+                await page.goto(url, wait_until="load", timeout=30000)
+            except Exception:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-        # Wait for specific selector if provided
+        # Extra wait for JS rendering
+        await asyncio.sleep(wait_seconds)
+
+        # Scroll down to trigger lazy-loaded content
+        if scroll:
+            for i in range(3):
+                await page.evaluate("window.scrollBy(0, window.innerHeight)")
+                await asyncio.sleep(0.8)
+
+        # Wait for specific selector if provided (non-fatal if missing)
         if wait_selector:
-            await page.wait_for_selector(wait_selector, timeout=10000)
+            try:
+                await page.wait_for_selector(wait_selector, timeout=8000)
+            except Exception:
+                self.logger.warning(
+                    "wait_selector_timeout",
+                    selector=wait_selector,
+                    url=url,
+                )
+                # Continue anyway — we'll parse whatever HTML is available
 
         # Get HTML content
         html = await page.content()

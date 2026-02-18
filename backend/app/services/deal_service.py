@@ -19,7 +19,7 @@ from app.models.product import Product
 from app.models.price_history import PriceHistory
 from app.models.shop import Shop
 from app.models.category import Category
-from app.services.price_analysis import PriceAnalyzer, DEAL_THRESHOLD
+from app.services.price_analysis import PriceAnalyzer, DEAL_THRESHOLD, CATEGORY_THRESHOLDS
 
 logger = structlog.get_logger(__name__)
 
@@ -226,13 +226,14 @@ class DealService:
         starts_at: Optional[datetime] = None,
         expires_at: Optional[datetime] = None,
         metadata: Optional[dict] = None,
-    ) -> Deal:
+    ) -> Optional[Deal]:
         """Create a new deal or update existing one for the same product+shop.
 
         This method handles upsert logic: if an active deal already exists
         for this product+shop combination, it updates it; otherwise creates new.
 
-        Also computes AI score using the PriceAnalyzer.
+        Also computes AI score using the PriceAnalyzer. Deals that score below
+        DEAL_THRESHOLD are not created (or are deactivated if they already exist).
 
         Args:
             product_id: Product UUID
@@ -250,7 +251,7 @@ class DealService:
             metadata: Optional additional metadata
 
         Returns:
-            Created or updated Deal object
+            Created or updated Deal object, or None if score is below threshold
         """
         self.logger.info(
             "creating_or_updating_deal",
@@ -291,6 +292,33 @@ class DealService:
             tier=score_result.deal_tier,
             is_deal=score_result.is_deal,
         )
+
+        # Determine the effective threshold for this category
+        effective_threshold = CATEGORY_THRESHOLDS.get(category_slug, DEAL_THRESHOLD) if category_slug else DEAL_THRESHOLD
+
+        # Enforce threshold: skip/deactivate deals that don't qualify
+        if score_result.score < effective_threshold:
+            if deal:
+                # Existing deal fell below threshold — deactivate it
+                self.logger.info(
+                    "deactivating_deal_below_threshold",
+                    deal_id=str(deal.id),
+                    score=float(score_result.score),
+                    threshold=float(effective_threshold),
+                )
+                deal.is_active = False
+                deal.ai_score = score_result.score
+                deal.ai_reasoning = score_result.reasoning
+                await self.db.commit()
+            else:
+                # New product didn't reach the bar — don't create a deal
+                self.logger.info(
+                    "skipping_deal_below_threshold",
+                    product_id=str(product_id),
+                    score=float(score_result.score),
+                    threshold=float(effective_threshold),
+                )
+            return None
 
         # Calculate discount percentage and amount
         discount_pct = None
@@ -356,6 +384,52 @@ class DealService:
         )
 
         return deal
+
+    async def deactivate_low_score_deals(
+        self,
+        threshold: Optional[Decimal] = None,
+    ) -> int:
+        """Deactivate all active deals whose AI score is below the threshold.
+
+        This is used both for one-time cleanup of pre-existing low-score deals
+        and as a periodic maintenance operation.  Deals are set to
+        ``is_active=False`` so they remain in the database for historical
+        reporting but are no longer surfaced to end users.
+
+        Args:
+            threshold: Minimum qualifying score. Defaults to DEAL_THRESHOLD (35).
+
+        Returns:
+            Number of deals deactivated
+        """
+        if threshold is None:
+            threshold = DEAL_THRESHOLD
+
+        self.logger.info(
+            "deactivating_low_score_deals",
+            threshold=float(threshold),
+        )
+
+        result = await self.db.execute(
+            update(Deal)
+            .where(and_(
+                Deal.is_active == True,
+                Deal.ai_score.isnot(None),
+                Deal.ai_score < threshold,
+            ))
+            .values(is_active=False)
+        )
+        await self.db.commit()
+
+        count = result.rowcount
+
+        self.logger.info(
+            "low_score_deals_deactivated",
+            count=count,
+            threshold=float(threshold),
+        )
+
+        return count
 
     async def expire_stale_deals(self) -> int:
         """Expire deals past their expiration time.

@@ -27,6 +27,32 @@ async def debug_scrape(shop_slug: str, db: AsyncSession = Depends(get_db)):
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
 
 
+@router.post("/debug/cleanup-low-score-deals")
+async def debug_cleanup_low_score_deals(
+    threshold: float = 35.0,
+    db: AsyncSession = Depends(get_db),
+):
+    """Debug endpoint to deactivate all active deals with AI score below threshold.
+
+    Useful for one-time cleanup of pre-threshold deals that were created before
+    the score gate was introduced.  Only available in DEBUG mode.
+
+    Args:
+        threshold: Minimum qualifying score (default: 35.0 = DEAL_THRESHOLD)
+    """
+    if not settings.DEBUG:
+        return {"error": "only available in debug mode"}
+    try:
+        from decimal import Decimal
+        from app.services.deal_service import DealService
+        service = DealService(db)
+        count = await service.deactivate_low_score_deals(threshold=Decimal(str(threshold)))
+        return {"status": "success", "deals_deactivated": count, "threshold": threshold}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
 @router.get("/debug/config")
 async def debug_config():
     """Debug endpoint to check config (redacted)."""

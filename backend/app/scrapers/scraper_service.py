@@ -156,6 +156,8 @@ class ScraperService:
             "products_updated": 0,
             "deals_created": 0,
             "deals_updated": 0,
+            "deals_skipped": 0,  # Products saved but score < DEAL_THRESHOLD
+            "deals_deactivated": 0,  # Existing deals dropped below threshold
             "errors": 0,
         }
 
@@ -187,10 +189,10 @@ class ScraperService:
                 else:
                     stats["products_updated"] += 1
 
-                # Create or update deal
+                # Create or update deal (returns None when score < DEAL_THRESHOLD)
                 deal_before_count = await self._count_active_deals(product.id, shop.id)
 
-                await self.deal_service.create_or_update_deal(
+                saved_deal = await self.deal_service.create_or_update_deal(
                     product_id=product.id,
                     shop_id=shop.id,
                     category_id=product.category_id,
@@ -206,19 +208,31 @@ class ScraperService:
                     metadata=deal.metadata,
                 )
 
-                deal_after_count = await self._count_active_deals(product.id, shop.id)
-
-                # Track if deal was created or updated
-                if deal_after_count > deal_before_count:
-                    stats["deals_created"] += 1
+                if saved_deal is None:
+                    # Score was below DEAL_THRESHOLD — product/price history still saved
+                    deal_after_count = await self._count_active_deals(product.id, shop.id)
+                    if deal_after_count < deal_before_count:
+                        # An existing deal was deactivated because score fell below threshold
+                        stats["deals_deactivated"] += 1
+                    else:
+                        # New product didn't qualify; no deal record written
+                        stats["deals_skipped"] += 1
+                    self.logger.debug(
+                        "deal_below_threshold",
+                        product_id=str(product.id),
+                        deal_title=deal.title[:50],
+                    )
                 else:
-                    stats["deals_updated"] += 1
-
-                self.logger.debug(
-                    "deal_processed",
-                    product_id=str(product.id),
-                    deal_title=deal.title[:50],
-                )
+                    deal_after_count = await self._count_active_deals(product.id, shop.id)
+                    if deal_after_count > deal_before_count:
+                        stats["deals_created"] += 1
+                    else:
+                        stats["deals_updated"] += 1
+                    self.logger.debug(
+                        "deal_processed",
+                        product_id=str(product.id),
+                        deal_title=deal.title[:50],
+                    )
 
             except Exception as e:
                 stats["errors"] += 1

@@ -248,8 +248,10 @@ class BaseScraperAdapter(BaseAdapter):
                 )
                 # Continue anyway — we'll parse whatever HTML is available
 
-        # Get HTML content
+        # Get HTML content — normalise non-breaking spaces so downstream
+        # parsers and Windows console output don't choke on \xa0.
         html = await page.content()
+        html = html.replace('\xa0', ' ')
         return html
 
     async def cleanup(self) -> None:

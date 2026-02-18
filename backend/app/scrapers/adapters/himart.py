@@ -1,7 +1,13 @@
 """Himart (하이마트) scraper adapter.
 
-Scrapes deals from Himart's special sale section.
-Electronics-focused retailer. Uses multiple URL strategies.
+Scrapes deals from Himart's homepage product listings.
+Electronics-focused retailer (Vue.js SPA).
+
+Structure: li.product__item.data--{goodsNo}
+  - div.product__thumb > a.product__link > img
+  - div.product__info > [class*=title] (product name)
+  - span.product__discounted-price (original price)
+  - span.product__benefit-price (sale price)
 """
 
 import re
@@ -30,21 +36,13 @@ logger = structlog.get_logger()
 _DEAL_URLS = [
     "https://www.e-himart.co.kr/app/display/showEvent",
     "https://www.e-himart.co.kr/app/display/best",
-    "https://m.e-himart.co.kr/app/display/showEvent",
-]
-
-_CARD_SELECTORS = [
-    ".prd-item",
-    ".product-list li",
-    ".prod_item",
-    "li[class*='item']",
-    "[class*='product']",
+    "https://www.e-himart.co.kr",
 ]
 
 _WAIT_SELECTOR = ", ".join([
-    ".prd-item",
-    ".product-list",
-    "[class*='item']",
+    ".product__item",
+    ".product__list",
+    "[class*='product']",
     "a[href*='goodsNo']",
 ])
 
@@ -72,9 +70,7 @@ class HimartAdapter(BaseScraperAdapter):
         all_deals: List[NormalizedDeal] = []
         seen_ids: set = set()
 
-        all_urls = list(_DEAL_URLS) + ["https://www.e-himart.co.kr"]
-
-        for url in all_urls:
+        for url in _DEAL_URLS:
             page = await context.new_page()
             try:
                 self.logger.info("trying_himart_url", url=url)
@@ -105,8 +101,21 @@ class HimartAdapter(BaseScraperAdapter):
         soup = BeautifulSoup(html, "html.parser")
         deals = []
 
-        # Strategy 1: Find all links to product pages
-        product_links = soup.select("a[href*='goodsNo='], a[href*='/goods/']")
+        # Strategy 1 (primary): li.product__item elements with data--{goodsNo} class
+        product_items = soup.select("li.product__item")
+        self.logger.info("himart_product_items_found", count=len(product_items))
+
+        for item in product_items:
+            deal = self._parse_product_item(item, seen_ids)
+            if deal:
+                deals.append(deal)
+                seen_ids.add(deal.product.external_id)
+
+        if deals:
+            return deals
+
+        # Strategy 2: Find links to product detail pages
+        product_links = soup.select("a[href*='goodsDetail'], a[href*='goodsNo=']")
         self.logger.info("himart_product_links_found", count=len(product_links))
 
         for link in product_links:
@@ -115,254 +124,70 @@ class HimartAdapter(BaseScraperAdapter):
                 deals.append(deal)
                 seen_ids.add(deal.product.external_id)
 
-        if deals:
-            return deals
-
-        # Strategy 2: card containers
-        for selector in _CARD_SELECTORS:
-            cards = soup.select(selector)
-            if not cards:
-                continue
-            self.logger.info("trying_card_selector", selector=selector, count=len(cards))
-            for card in cards:
-                deal = self._parse_deal_card(card, seen_ids)
-                if deal:
-                    deals.append(deal)
-                    seen_ids.add(deal.product.external_id)
-            if deals:
-                break
-
         return deals
 
-    def _parse_from_link(self, link_elem, seen_ids: set) -> Optional[NormalizedDeal]:
-        """Parse a deal from a product link element."""
+    def _parse_product_item(self, item, seen_ids: set) -> Optional[NormalizedDeal]:
+        """Parse a li.product__item element (Himart Vue.js structure)."""
         try:
-            href = link_elem.get("href", "")
-            if not href:
-                return None
-
-            id_match = re.search(r"goodsNo=(\d+)", href) or re.search(r"/goods/(\d+)", href)
-            if not id_match:
-                return None
-            external_id = id_match.group(1)
-
-            if external_id in seen_ids:
-                return None
-
-            product_url = href
-            if not product_url.startswith("http"):
-                product_url = f"https://www.e-himart.co.kr{product_url}"
-
-            container = link_elem
-            title = None
-            current_price = None
-            original_price = None
-            discount_pct = None
-            image_url = None
-
-            for sel in ["[class*='name']", "[class*='title']", "[class*='text']"]:
-                elem = container.select_one(sel)
-                if elem:
-                    text = elem.get_text(strip=True)
-                    if text and len(text) > 5 and not re.match(r'^[\d,%원]+$', text):
-                        title = text
-                        break
-
-            for sel in [
-                "[class*='price'] strong", "[class*='sale'] strong",
-                "[class*='price']", "[class*='value']",
-            ]:
-                for elem in container.select(sel):
-                    text = elem.get_text(strip=True)
-                    price = PriceNormalizer.clean_price_string(text)
-                    if price and 100 < price < 100_000_000:
-                        current_price = price
-                        break
-                if current_price:
+            # Extract goodsNo from class like 'data--0042613057'
+            external_id = None
+            for cls in item.get("class", []):
+                if cls.startswith("data--"):
+                    external_id = cls.replace("data--", "")
                     break
 
-            for sel in ["del", "s", "[class*='origin']", "[class*='before']"]:
-                elem = container.select_one(sel)
-                if elem:
-                    text = elem.get_text(strip=True)
-                    price = PriceNormalizer.clean_price_string(text)
-                    if price and price > (current_price or 0):
-                        original_price = price
-                        break
-
-            for sel in ["[class*='discount']", "[class*='rate']", "[class*='percent']"]:
-                elem = container.select_one(sel)
-                if elem:
-                    text = elem.get_text(strip=True)
-                    m = re.search(r"(\d+)\s*%", text)
-                    if m:
-                        discount_pct = Decimal(m.group(1))
-                        break
-
-            if not title or not current_price:
-                flat_text = container.get_text(strip=True)
-                title, current_price, original_price, discount_pct = (
-                    self._parse_from_flat_text(flat_text, title, current_price, original_price, discount_pct)
-                )
-
-            if not title or not current_price:
+            if not external_id or external_id in seen_ids:
                 return None
 
-            title = re.sub(r'^\d{1,3}(?=[가-힣A-Za-z\[\(])', '', title).strip()
-            if len(title) < 3:
-                return None
+            product_url = f"https://www.e-himart.co.kr/app/goods/goodsDetail?goodsNo={external_id}"
 
-            if not discount_pct and original_price and original_price > current_price:
-                discount_pct = self._calculate_discount_percentage(original_price, current_price)
+            # Title from [class*=title] inside .product__info
+            title = None
+            title_elem = item.select_one("[class*='title']")
+            if title_elem:
+                title = title_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                # Fallback: get text from .product__info minus price portions
+                info = item.select_one(".product__info")
+                if info:
+                    for child in info.select("[class*='price']"):
+                        child.decompose()
+                    title = info.get_text(strip=True)[:120]
 
-            img = container.select_one("img")
-            if img:
-                image_url = img.get("src") or img.get("data-src") or img.get("data-original")
-                if image_url and image_url.startswith("//"):
-                    image_url = f"https:{image_url}"
-                elif image_url and not image_url.startswith("http"):
-                    image_url = None
-
-            category_hint = CategoryClassifier.classify(title)
-            if not category_hint:
-                category_hint = "electronics-tv"
-
-            product = NormalizedProduct(
-                external_id=external_id,
-                title=title,
-                current_price=current_price,
-                product_url=product_url,
-                original_price=original_price,
-                currency="KRW",
-                image_url=image_url,
-                category_hint=category_hint,
-                metadata={"source": "event"},
-            )
-
-            return NormalizedDeal(
-                product=product,
-                deal_price=current_price,
-                title=title,
-                deal_url=product_url,
-                original_price=original_price,
-                discount_percentage=discount_pct,
-                deal_type="price_drop",
-                image_url=image_url,
-                metadata={"source": "event", "shop": self.shop_name},
-            )
-
-        except Exception as e:
-            self.logger.debug("parse_from_link_failed", error=str(e))
-            return None
-
-    def _parse_from_flat_text(
-        self, text: str,
-        existing_title: Optional[str],
-        existing_price: Optional[Decimal],
-        existing_original: Optional[Decimal],
-        existing_discount: Optional[Decimal],
-    ):
-        """Extract title, prices, and discount from a combined text string."""
-        if not text:
-            return existing_title, existing_price, existing_original, existing_discount
-
-        discount = existing_discount
-        if not discount:
-            m = re.search(r'(\d{1,2})\s*%', text)
-            if m:
-                discount = Decimal(m.group(1))
-
-        price_pattern = r'(\d{1,3}(?:,\d{3})+)'
-        price_matches = re.findall(price_pattern, text)
-        prices = []
-        for pm in price_matches:
-            val = Decimal(pm.replace(',', ''))
-            if 100 < val < 100_000_000:
-                prices.append(val)
-
-        current_price = existing_price
-        original_price = existing_original
-
-        if not current_price and prices:
-            if len(prices) >= 2:
-                original_price = max(prices[:2])
-                current_price = min(prices[:2])
-            else:
-                current_price = prices[0]
-
-        title = existing_title
-        if not title:
-            cleaned = re.sub(r'\d{1,3}(,\d{3})+', '', text)
-            cleaned = re.sub(r'\d+%할인', '', cleaned)
-            cleaned = re.sub(r'(판매가|정상가|할인|원)', '', cleaned)
-            cleaned = re.sub(r'^\d{1,3}\s*', '', cleaned)
-            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-            if len(cleaned) > 5:
-                title = cleaned
-
-        return title, current_price, original_price, discount
-
-    def _parse_deal_card(self, card, seen_ids: set) -> Optional[NormalizedDeal]:
-        """Parse a generic card container."""
-        try:
-            link_elem = card.select_one("a[href*='goodsNo'], a[href*='/goods/']")
-            if not link_elem:
-                link_elem = card.select_one("a[href]")
-            if not link_elem:
-                return None
-
-            href = link_elem.get("href", "")
-            id_match = re.search(r"goodsNo=(\d+)", href) or re.search(r"/goods/(\d+)", href)
-            if not id_match:
-                return None
-            external_id = id_match.group(1)
-
-            if external_id in seen_ids:
-                return None
-
-            product_url = href
-            if not product_url.startswith("http"):
-                product_url = f"https://www.e-himart.co.kr{product_url}"
-
-            title_elem = (
-                card.select_one("[class*='name']") or
-                card.select_one("[class*='title']") or
-                card.select_one("span") or
-                link_elem
-            )
-            title = title_elem.get_text(strip=True) if title_elem else None
             if not title or len(title) < 3:
                 return None
 
+            # Prices: .product__discounted-price = original, .product__benefit-price = sale
+            original_price = None
             current_price = None
-            for sel in ["[class*='price'] strong", "[class*='sale'] strong", "[class*='price']", "strong", "em"]:
-                for elem in card.select(sel):
-                    text = elem.get_text(strip=True)
-                    price = PriceNormalizer.clean_price_string(text)
-                    if price and price > 100:
-                        current_price = price
-                        break
-                if current_price:
-                    break
+
+            disc_elem = item.select_one(".product__discounted-price")
+            if disc_elem:
+                original_price = PriceNormalizer.clean_price_string(disc_elem.get_text(strip=True))
+
+            bene_elem = item.select_one(".product__benefit-price")
+            if bene_elem:
+                current_price = PriceNormalizer.clean_price_string(bene_elem.get_text(strip=True))
+
+            # If only discounted price, use it as current price
+            if not current_price and original_price:
+                current_price = original_price
+                original_price = None
+
             if not current_price:
                 return None
 
-            original_price = None
-            for sel in ["del", "[class*='original']", "[class*='origin']", "s"]:
-                elem = card.select_one(sel)
-                if elem:
-                    text = elem.get_text(strip=True)
-                    price = PriceNormalizer.clean_price_string(text)
-                    if price and price > current_price:
-                        original_price = price
-                        break
+            # Ensure original > current
+            if original_price and original_price <= current_price:
+                original_price = None
 
             discount_pct = None
             if original_price and original_price > current_price:
                 discount_pct = self._calculate_discount_percentage(original_price, current_price)
 
+            # Image
             image_url = None
-            img = card.select_one("img")
+            img = item.select_one("img")
             if img:
                 image_url = img.get("src") or img.get("data-src")
                 if image_url and image_url.startswith("//"):
@@ -383,7 +208,7 @@ class HimartAdapter(BaseScraperAdapter):
                 currency="KRW",
                 image_url=image_url,
                 category_hint=category_hint,
-                metadata={"source": "event"},
+                metadata={"source": "homepage"},
             )
 
             return NormalizedDeal(
@@ -395,11 +220,79 @@ class HimartAdapter(BaseScraperAdapter):
                 discount_percentage=discount_pct,
                 deal_type="price_drop",
                 image_url=image_url,
-                metadata={"source": "event", "shop": self.shop_name},
+                metadata={"source": "homepage", "shop": self.shop_name},
             )
 
         except Exception as e:
-            self.logger.debug("parse_deal_card_failed", error=str(e))
+            self.logger.debug("parse_product_item_failed", error=str(e))
+            return None
+
+    def _parse_from_link(self, link_elem, seen_ids: set) -> Optional[NormalizedDeal]:
+        """Parse a deal from a product detail link (fallback)."""
+        try:
+            href = link_elem.get("href", "")
+            if not href:
+                return None
+
+            id_match = re.search(r"goodsNo=(\d+)", href) or re.search(r"/goods/(\d+)", href)
+            if not id_match:
+                return None
+            external_id = id_match.group(1)
+
+            if external_id in seen_ids:
+                return None
+
+            product_url = href
+            if not product_url.startswith("http"):
+                product_url = f"https://www.e-himart.co.kr{product_url}"
+
+            title = link_elem.get_text(strip=True)
+            if not title or len(title) < 5:
+                return None
+
+            # Try to find price in siblings/parent
+            container = link_elem.parent
+            if container:
+                container = container.parent or container
+
+            current_price = None
+            if container:
+                for sel in [".product__benefit-price", ".product__discounted-price", "[class*='price']"]:
+                    elem = container.select_one(sel)
+                    if elem:
+                        price = PriceNormalizer.clean_price_string(elem.get_text(strip=True))
+                        if price and price > 100:
+                            current_price = price
+                            break
+
+            if not current_price:
+                return None
+
+            category_hint = CategoryClassifier.classify(title)
+            if not category_hint:
+                category_hint = "electronics-tv"
+
+            product = NormalizedProduct(
+                external_id=external_id,
+                title=title,
+                current_price=current_price,
+                product_url=product_url,
+                currency="KRW",
+                category_hint=category_hint,
+                metadata={"source": "link"},
+            )
+
+            return NormalizedDeal(
+                product=product,
+                deal_price=current_price,
+                title=title,
+                deal_url=product_url,
+                deal_type="price_drop",
+                metadata={"source": "link", "shop": self.shop_name},
+            )
+
+        except Exception as e:
+            self.logger.debug("parse_from_link_failed", error=str(e))
             return None
 
     @retry(
@@ -414,15 +307,15 @@ class HimartAdapter(BaseScraperAdapter):
 
         try:
             product_url = f"https://www.e-himart.co.kr/app/goods/goodsDetail?goodsNo={external_id}"
-            html = await self._safe_scrape(page, product_url, ".prod_info, .product-detail")
+            html = await self._safe_scrape(page, product_url, ".product__info, [class*='product']")
             soup = BeautifulSoup(html, "html.parser")
 
-            title_elem = soup.select_one(".prod_info .prod_name, h1.product-title, h1")
+            title_elem = soup.select_one("[class*='title'], h1, .product__name")
             if not title_elem:
                 return None
             title = title_elem.get_text(strip=True)
 
-            price_elem = soup.select_one(".price_info .sale strong, .sale-price strong, [class*='price'] strong")
+            price_elem = soup.select_one(".product__benefit-price, .product__discounted-price, [class*='price'] strong")
             if not price_elem:
                 return None
             current_price = PriceNormalizer.clean_price_string(price_elem.get_text(strip=True))
@@ -430,12 +323,14 @@ class HimartAdapter(BaseScraperAdapter):
                 return None
 
             original_price = None
-            original_elem = soup.select_one(".price_info .original, .original-price, del")
+            original_elem = soup.select_one(".product__discounted-price, del")
             if original_elem:
-                original_price = PriceNormalizer.clean_price_string(original_elem.get_text(strip=True))
+                op = PriceNormalizer.clean_price_string(original_elem.get_text(strip=True))
+                if op and op > current_price:
+                    original_price = op
 
             image_url = None
-            img_elem = soup.select_one(".prod_img img, .product-image img, img[src*='image']")
+            img_elem = soup.select_one(".product__thumb img, img[src*='goods']")
             if img_elem:
                 image_url = img_elem.get("src") or img_elem.get("data-src")
                 if image_url and image_url.startswith("//"):

@@ -393,11 +393,16 @@ async def scrape_shop(
 
         # Dry run: print samples and return
         if dry_run:
+            def _safe(s: str) -> str:
+                """Replace non-ASCII whitespace to avoid cp949 codec errors."""
+                return s.replace('\xa0', ' ').encode('utf-8', 'replace').decode('utf-8')
+
             print(f"[{shop_slug}] [DRY RUN] 백엔드 전송 건너뜀. 딜 {len(deal_dicts)}개:")
             for i, sample in enumerate(deal_dicts[:5]):
                 orig = sample.get('original_price')
                 pct = sample.get('discount_percentage')
-                print(f"  {i+1}. {sample.get('title', 'N/A')[:60]}")
+                title = _safe(sample.get('title', 'N/A'))[:60]
+                print(f"  {i+1}. {title}")
                 print(f"     가격: {sample.get('deal_price', 'N/A'):,.0f}원"
                       f"{f' (원래 {orig:,.0f}원, -{pct:.0f}%)' if orig and pct else ''}")
             if len(deal_dicts) > 5:

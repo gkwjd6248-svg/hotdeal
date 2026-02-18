@@ -21,112 +21,27 @@ from app.models import Shop, Category
 async def seed_shops():
     """Seed initial shop data."""
     shops_data = [
-        {
-            "name": "쿠팡",
-            "name_en": "Coupang",
-            "slug": "coupang",
-            "base_url": "https://www.coupang.com",
-            "adapter_type": "api",
-            "is_active": True,
-            "scrape_interval_minutes": 60,
-            "country": "KR",
-            "currency": "KRW",
-            "logo_url": "https://image.coupangcdn.com/image/coupang/common/logo_coupang_w350.png",
-            "metadata_": {
-                "api_type": "coupang_partners",
-                "requires_auth": True,
-            }
-        },
-        {
-            "name": "11번가",
-            "name_en": "11st",
-            "slug": "11st",
-            "base_url": "https://www.11st.co.kr",
-            "adapter_type": "api",
-            "is_active": True,
-            "scrape_interval_minutes": 60,
-            "country": "KR",
-            "currency": "KRW",
-            "metadata_": {
-                "api_type": "11st_open_api",
-                "requires_auth": True,
-            }
-        },
-        {
-            "name": "네이버 쇼핑",
-            "name_en": "Naver Shopping",
-            "slug": "naver",
-            "base_url": "https://shopping.naver.com",
-            "adapter_type": "api",
-            "is_active": True,
-            "scrape_interval_minutes": 30,
-            "country": "KR",
-            "currency": "KRW",
-            "metadata_": {
-                "api_type": "naver_search_api",
-                "requires_auth": True,
-            }
-        },
-        {
-            "name": "G마켓",
-            "name_en": "Gmarket",
-            "slug": "gmarket",
-            "base_url": "https://www.gmarket.co.kr",
-            "adapter_type": "scraper",
-            "is_active": True,
-            "scrape_interval_minutes": 120,
-            "country": "KR",
-            "currency": "KRW",
-            "metadata_": {
-                "scraper_type": "playwright",
-                "requires_js": True,
-            }
-        },
-        {
-            "name": "옥션",
-            "name_en": "Auction",
-            "slug": "auction",
-            "base_url": "https://www.auction.co.kr",
-            "adapter_type": "scraper",
-            "is_active": True,
-            "scrape_interval_minutes": 120,
-            "country": "KR",
-            "currency": "KRW",
-            "metadata_": {
-                "scraper_type": "playwright",
-                "requires_js": True,
-            }
-        },
-        {
-            "name": "Amazon US",
-            "name_en": "Amazon US",
-            "slug": "amazon-us",
-            "base_url": "https://www.amazon.com",
-            "adapter_type": "api",
-            "is_active": False,
-            "scrape_interval_minutes": 180,
-            "country": "US",
-            "currency": "USD",
-            "metadata_": {
-                "api_type": "amazon_pa_api",
-                "requires_auth": True,
-            }
-        },
-        {
-            "name": "AliExpress",
-            "name_en": "AliExpress",
-            "slug": "aliexpress",
-            "base_url": "https://www.aliexpress.com",
-            "adapter_type": "api",
-            "is_active": False,
-            "scrape_interval_minutes": 180,
-            "country": "CN",
-            "currency": "USD",
-            "metadata_": {
-                "api_type": "aliexpress_open_api",
-                "requires_auth": True,
-            }
-        },
+        # --- Korean API-based ---
+        {"name": "네이버 쇼핑", "name_en": "Naver Shopping", "slug": "naver", "base_url": "https://shopping.naver.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 30, "country": "KR", "currency": "KRW", "metadata_": {"api_type": "naver_search_api"}},
+        {"name": "쿠팡", "name_en": "Coupang", "slug": "coupang", "base_url": "https://www.coupang.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 60, "country": "KR", "currency": "KRW", "metadata_": {"api_type": "coupang_partners"}},
+        {"name": "11번가", "name_en": "11st", "slug": "11st", "base_url": "https://www.11st.co.kr", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 60, "country": "KR", "currency": "KRW", "metadata_": {"api_type": "11st_open_api"}},
+        # --- Korean scraper-based ---
+        {"name": "G마켓", "name_en": "Gmarket", "slug": "gmarket", "base_url": "https://www.gmarket.co.kr", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "옥션", "name_en": "Auction", "slug": "auction", "base_url": "https://www.auction.co.kr", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "SSG닷컴", "name_en": "SSG", "slug": "ssg", "base_url": "https://www.ssg.com", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "하이마트", "name_en": "Himart", "slug": "himart", "base_url": "https://www.e-himart.co.kr", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "롯데온", "name_en": "Lotteon", "slug": "lotteon", "base_url": "https://www.lotteon.com", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "인터파크", "name_en": "Interpark", "slug": "interpark", "base_url": "https://www.interpark.com", "adapter_type": "scraper", "is_active": False, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "무신사", "name_en": "Musinsa", "slug": "musinsa", "base_url": "https://www.musinsa.com", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        {"name": "SSF샵", "name_en": "SSF Shop", "slug": "ssf", "base_url": "https://www.ssfshop.com", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW", "metadata_": {}},
+        # --- International API-based ---
+        {"name": "스팀", "name_en": "Steam", "slug": "steam", "base_url": "https://store.steampowered.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 60, "country": "US", "currency": "USD", "metadata_": {}},
+        {"name": "알리익스프레스", "name_en": "AliExpress", "slug": "aliexpress", "base_url": "https://www.aliexpress.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 180, "country": "CN", "currency": "USD", "metadata_": {}},
+        {"name": "아마존", "name_en": "Amazon", "slug": "amazon", "base_url": "https://www.amazon.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 180, "country": "US", "currency": "USD", "metadata_": {}},
+        {"name": "이베이", "name_en": "eBay", "slug": "ebay", "base_url": "https://www.ebay.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 180, "country": "US", "currency": "USD", "metadata_": {}},
+        {"name": "뉴에그", "name_en": "Newegg", "slug": "newegg", "base_url": "https://www.newegg.com", "adapter_type": "api", "is_active": True, "scrape_interval_minutes": 180, "country": "US", "currency": "USD", "metadata_": {}},
+        # --- International scraper-based ---
+        {"name": "타오바오", "name_en": "Taobao", "slug": "taobao", "base_url": "https://www.taobao.com", "adapter_type": "scraper", "is_active": True, "scrape_interval_minutes": 180, "country": "CN", "currency": "CNY", "metadata_": {}},
     ]
 
     async with async_session_factory() as session:

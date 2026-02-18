@@ -26,14 +26,17 @@ avoid timing-oracle attacks.
 
 import secrets
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.dependencies import get_db
+from app.models.shop import Shop
 from app.schemas.ingest import IngestRequest, IngestResponse, IngestStats
 from app.scrapers.base import NormalizedDeal, NormalizedProduct
 from app.scrapers.scraper_service import ScraperService
@@ -233,3 +236,99 @@ async def ingest_deals(
     )
 
     return IngestResponse(status="success", stats=stats)
+
+
+# ---------------------------------------------------------------------------
+# Shop seed endpoint
+# ---------------------------------------------------------------------------
+
+# Complete list of all 17 supported shops
+ALL_SHOPS: List[Dict[str, Any]] = [
+    # --- Korean API-based ---
+    {"name": "네이버 쇼핑", "name_en": "Naver Shopping", "slug": "naver", "base_url": "https://shopping.naver.com", "adapter_type": "api", "scrape_interval_minutes": 30, "country": "KR", "currency": "KRW"},
+    {"name": "쿠팡", "name_en": "Coupang", "slug": "coupang", "base_url": "https://www.coupang.com", "adapter_type": "api", "scrape_interval_minutes": 60, "country": "KR", "currency": "KRW"},
+    {"name": "11번가", "name_en": "11st", "slug": "11st", "base_url": "https://www.11st.co.kr", "adapter_type": "api", "scrape_interval_minutes": 60, "country": "KR", "currency": "KRW"},
+    # --- Korean scraper-based ---
+    {"name": "G마켓", "name_en": "Gmarket", "slug": "gmarket", "base_url": "https://www.gmarket.co.kr", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "옥션", "name_en": "Auction", "slug": "auction", "base_url": "https://www.auction.co.kr", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "SSG닷컴", "name_en": "SSG", "slug": "ssg", "base_url": "https://www.ssg.com", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "하이마트", "name_en": "Himart", "slug": "himart", "base_url": "https://www.e-himart.co.kr", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "롯데온", "name_en": "Lotteon", "slug": "lotteon", "base_url": "https://www.lotteon.com", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "인터파크", "name_en": "Interpark", "slug": "interpark", "base_url": "https://www.interpark.com", "adapter_type": "scraper", "is_active": False, "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "무신사", "name_en": "Musinsa", "slug": "musinsa", "base_url": "https://www.musinsa.com", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    {"name": "SSF샵", "name_en": "SSF Shop", "slug": "ssf", "base_url": "https://www.ssfshop.com", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "KR", "currency": "KRW"},
+    # --- International API-based ---
+    {"name": "스팀", "name_en": "Steam", "slug": "steam", "base_url": "https://store.steampowered.com", "adapter_type": "api", "scrape_interval_minutes": 60, "country": "US", "currency": "USD"},
+    {"name": "알리익스프레스", "name_en": "AliExpress", "slug": "aliexpress", "base_url": "https://www.aliexpress.com", "adapter_type": "api", "scrape_interval_minutes": 180, "country": "CN", "currency": "USD"},
+    {"name": "아마존", "name_en": "Amazon", "slug": "amazon", "base_url": "https://www.amazon.com", "adapter_type": "api", "scrape_interval_minutes": 180, "country": "US", "currency": "USD"},
+    {"name": "이베이", "name_en": "eBay", "slug": "ebay", "base_url": "https://www.ebay.com", "adapter_type": "api", "scrape_interval_minutes": 180, "country": "US", "currency": "USD"},
+    {"name": "뉴에그", "name_en": "Newegg", "slug": "newegg", "base_url": "https://www.newegg.com", "adapter_type": "api", "scrape_interval_minutes": 180, "country": "US", "currency": "USD"},
+    # --- International scraper-based ---
+    {"name": "타오바오", "name_en": "Taobao", "slug": "taobao", "base_url": "https://www.taobao.com", "adapter_type": "scraper", "scrape_interval_minutes": 180, "country": "CN", "currency": "CNY"},
+]
+
+
+class SeedShopsRequest(BaseModel):
+    api_key: str = Field(..., min_length=1)
+
+
+class SeedShopsResponse(BaseModel):
+    status: str
+    created: List[str]
+    already_existed: List[str]
+
+
+@router.post(
+    "/seed-shops",
+    response_model=SeedShopsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Seed all shop records into the database",
+    tags=["ingest"],
+)
+async def seed_shops(
+    body: SeedShopsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SeedShopsResponse:
+    """Create missing shop records so the ingest pipeline can resolve shop slugs."""
+    _verify_api_key(body.api_key)
+
+    created: List[str] = []
+    already_existed: List[str] = []
+
+    for shop_data in ALL_SHOPS:
+        slug = shop_data["slug"]
+        result = await db.execute(select(Shop).where(Shop.slug == slug))
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            already_existed.append(slug)
+            continue
+
+        shop = Shop(
+            name=shop_data["name"],
+            name_en=shop_data["name_en"],
+            slug=slug,
+            base_url=shop_data["base_url"],
+            adapter_type=shop_data.get("adapter_type", "scraper"),
+            is_active=shop_data.get("is_active", True),
+            scrape_interval_minutes=shop_data.get("scrape_interval_minutes", 60),
+            country=shop_data.get("country", "KR"),
+            currency=shop_data.get("currency", "KRW"),
+            metadata_={},
+        )
+        db.add(shop)
+        created.append(slug)
+
+    await db.commit()
+
+    logger.info(
+        "seed_shops_complete",
+        created=created,
+        already_existed=already_existed,
+    )
+
+    return SeedShopsResponse(
+        status="success",
+        created=created,
+        already_existed=already_existed,
+    )

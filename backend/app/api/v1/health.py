@@ -7,8 +7,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db
 from app.schemas import HealthCheckResponse
 from app.services.cache_service import get_cache
+from app.config import settings
 
 router = APIRouter()
+
+
+@router.get("/debug/scrape/{shop_slug}")
+async def debug_scrape(shop_slug: str, db: AsyncSession = Depends(get_db)):
+    """Debug endpoint to manually trigger a scrape and see results."""
+    if not settings.DEBUG:
+        return {"error": "only available in debug mode"}
+    try:
+        from app.scrapers.scraper_service import ScraperService
+        service = ScraperService(db)
+        stats = await service.run_adapter(shop_slug)
+        return {"status": "success", "stats": stats}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
+@router.get("/debug/config")
+async def debug_config():
+    """Debug endpoint to check config (redacted)."""
+    if not settings.DEBUG:
+        return {"error": "only available in debug mode"}
+    return {
+        "naver_client_id_set": bool(settings.NAVER_CLIENT_ID),
+        "naver_client_id_length": len(settings.NAVER_CLIENT_ID),
+        "naver_secret_set": bool(settings.NAVER_CLIENT_SECRET),
+        "environment": settings.ENVIRONMENT,
+        "database_url_prefix": settings.DATABASE_URL[:30] + "...",
+    }
 
 
 @router.get("/health", response_model=HealthCheckResponse)

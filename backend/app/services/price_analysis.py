@@ -59,30 +59,30 @@ RECENT_WINDOW_DAYS = 7             # Look back 7 days for recent average
 # Maps keyword pattern -> bonus points (cumulative, capped later)
 DEAL_KEYWORDS: dict[str, float] = {
     # High-signal keywords (very explicit deal language)
-    "초특가": 8.0,
-    "반값": 8.0,
-    "최저가": 7.0,
-    "역대최저": 7.0,
-    "최저": 5.0,
-    "땡처리": 6.0,
-    "한정특가": 6.0,
-    "특가": 5.0,
-    "슈퍼특가": 8.0,
-    "핫딜": 6.0,
-    "타임특가": 6.0,
-    "신년특가": 5.0,
-    "오늘만특가": 7.0,
-    "오늘도특가": 5.0,
+    "초특가": 12.0,
+    "반값": 12.0,
+    "최저가": 10.0,
+    "역대최저": 10.0,
+    "최저": 7.0,
+    "땡처리": 10.0,
+    "한정특가": 10.0,
+    "특가": 8.0,
+    "슈퍼특가": 12.0,
+    "핫딜": 10.0,
+    "타임특가": 10.0,
+    "신년특가": 8.0,
+    "오늘만특가": 12.0,
+    "오늘도특가": 8.0,
     # Medium-signal keywords
-    "할인": 4.0,
-    "세일": 4.0,
-    "대폭할인": 6.0,
-    "한시적": 3.0,
-    "이벤트": 3.0,
-    "혜택": 2.0,
+    "할인": 6.0,
+    "세일": 6.0,
+    "대폭할인": 10.0,
+    "한시적": 4.0,
+    "이벤트": 4.0,
+    "혜택": 3.0,
     # Low-signal keywords
-    "단독": 2.0,
-    "한정": 2.0,
+    "단독": 3.0,
+    "한정": 3.0,
     "추천": 1.0,
 }
 
@@ -140,7 +140,7 @@ class PriceAnalyzer:
 
     Lightweight path (< 5 price records):
         - Component F (0-40): Listed discount rate
-        - Component G (0-20): Korean deal keyword boost
+        - Component G (0-25): Korean deal keyword boost
         - Component H (0-20): Price relative to category median
         - Component I (0-10): Freshness bonus
         - Component J (0-10): Shop reliability bonus
@@ -572,7 +572,7 @@ class PriceAnalyzer:
                 total_bonus += points
                 hits.append(keyword)
 
-        return min(20.0, total_bonus), hits
+        return min(25.0, total_bonus), hits
 
     async def _score_category_relative_price(
         self,

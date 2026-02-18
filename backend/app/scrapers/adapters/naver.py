@@ -452,6 +452,15 @@ class NaverShoppingAdapter(BaseAPIAdapter):
             original_price = hprice
             discount_percentage = self._calculate_discount_percentage(hprice, lprice)
 
+        # Skip items without price comparison data AND without strong deal signals
+        if not original_price:
+            # Check if title has strong deal keywords to justify inclusion
+            title_lower = title.lower()
+            strong_keywords = ["초특가", "반값", "최저가", "역대최저", "땡처리", "한정특가", "슈퍼특가", "오늘만특가", "타임특가"]
+            has_strong_keyword = any(kw in title_lower for kw in strong_keywords)
+            if not has_strong_keyword:
+                return None  # Skip items without discount info or strong deal signals
+
         # Determine deal type
         deal_type = "price_drop"
         if discount_percentage and discount_percentage >= 30:
@@ -459,7 +468,6 @@ class NaverShoppingAdapter(BaseAPIAdapter):
         elif discount_percentage and discount_percentage >= 10:
             deal_type = "price_drop"
         else:
-            # Even without explicit discount, it's still a deal from search
             deal_type = "price_drop"
 
         # Auto-classify category using title keywords first,

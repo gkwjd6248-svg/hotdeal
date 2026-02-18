@@ -81,7 +81,6 @@ try:
     from app.scrapers.adapters.ssg import SSGAdapter
     from app.scrapers.adapters.himart import HimartAdapter
     from app.scrapers.adapters.lotteon import LotteonAdapter
-    from app.scrapers.adapters.interpark import InterparkAdapter
     from app.scrapers.adapters.musinsa import MusinsaAdapter
     from app.scrapers.adapters.ssf import SSFAdapter
     from app.scrapers.adapters.taobao import TaobaoAdapter
@@ -92,8 +91,18 @@ except ImportError as exc:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Logging setup
+# Logging setup — force UTF-8 stdout for non-ASCII (Chinese, emoji, etc.)
 # ---------------------------------------------------------------------------
+import io as _io
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout = _io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True,
+    )
+    sys.stderr = _io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True,
+    )
+
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="%H:%M:%S"),
@@ -119,7 +128,7 @@ BROWSER_SHOP_REGISTRY: Dict[str, Any] = {
     "ssg": SSGAdapter,
     "himart": HimartAdapter,
     "lotteon": LotteonAdapter,
-    "interpark": InterparkAdapter,
+    # interpark: 여행/엔터테인먼트로 전환됨 (nol.interpark.com), 쇼핑 상품 없음
     "musinsa": MusinsaAdapter,
     "ssf": SSFAdapter,
     "taobao": TaobaoAdapter,

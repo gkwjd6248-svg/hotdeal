@@ -1,415 +1,269 @@
-"""
-Taobao (淘宝) Scraper Adapter
+"""Taobao (淘宝) scraper adapter.
 
-This is the HARDEST scraping target due to Alibaba's aggressive anti-bot system.
-Uses world.taobao.com for international access with less strict bot detection.
+Scrapes deals from world.taobao.com for international access.
+Hardest scraping target due to Alibaba's aggressive anti-bot system.
 
-Anti-bot measures implemented:
-- Low rate limit (5 RPM)
-- User-agent rotation
-- Random delays and human-like behavior
-- Proxy support (Chinese IP preferred)
-- Fallback to mobile H5 pages
-
-Target pages (no login required):
-- World Taobao search: https://world.taobao.com/search/search.htm?q={keyword}
-- Mobile daily deals: https://h5.m.taobao.com/act/dailyDeals/index.html
-
-Note: This adapter will fail frequently due to CAPTCHA and IP blocks.
+Anti-bot measures: low RPM, random delays, human-like scrolling.
 Expected success rate: 30-50% depending on proxy quality.
 """
 
 import asyncio
 import random
 import re
-from typing import Optional, List
-from datetime import datetime
+from decimal import Decimal
+from typing import List, Optional
+
+import structlog
 from bs4 import BeautifulSoup
 try:
     from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 except ImportError:
     Page = None
     PlaywrightTimeout = TimeoutError
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 
 from app.scrapers.base import BaseScraperAdapter, NormalizedDeal, NormalizedProduct
 from app.scrapers.utils.normalizer import PriceNormalizer, CategoryClassifier
-from app.scrapers.utils.rate_limiter import DomainRateLimiter
+
+
+logger = structlog.get_logger()
+
+# Search keywords per category (Chinese)
+_CATEGORY_KEYWORDS = {
+    "pc-hardware": ["显卡", "固态硬盘", "内存条"],
+    "laptop-mobile": ["笔记本电脑", "平板电脑", "智能手机"],
+    "electronics-tv": ["蓝牙耳机", "电视", "扫地机器人"],
+    "games-software": ["游戏手柄", "键盘鼠标"],
+    "fashion": ["运动鞋", "T恤"],
+    "beauty": ["护肤品", "化妆品"],
+}
+
+# Default terms when no category specified
+_DEFAULT_TERMS = ["数码好物", "电子产品特价", "今日特价"]
+
+_WAIT_SELECTOR = ", ".join([
+    ".item",
+    ".product-item",
+    "[class*='item']",
+    "[class*='product']",
+])
+
+# CNY to KRW rough rate (updated periodically by CurrencyConverter)
+_CNY_TO_KRW_FALLBACK = Decimal("190")
 
 
 class TaobaoAdapter(BaseScraperAdapter):
-    """
-    Taobao scraper adapter with aggressive anti-bot countermeasures.
-
-    Challenges:
-    - Alibaba's puncha.js anti-bot system
-    - Slide CAPTCHA detection
-    - IP-based rate limiting
-    - Dynamic content loading
-
-    Strategy:
-    - Use world.taobao.com (less strict, international focus)
-    - Simulate human browsing patterns
-    - Low rate limits with random delays
-    - Graceful degradation on failures
-    """
+    """Taobao deal scraper adapter with anti-bot countermeasures."""
 
     shop_slug = "taobao"
     shop_name = "타오바오"
-    adapter_type = "scraper"
+    RATE_LIMIT_RPM = 5  # Very conservative
 
-    # Category mapping to Chinese keywords
-    CATEGORY_KEYWORDS = {
-        "pc-hardware": ["显卡", "固态硬盘", "内存条", "主板", "CPU处理器"],
-        "laptop-mobile": ["笔记本电脑", "平板电脑", "智能手机", "iPad", "MacBook"],
-        "electronics-tv": ["蓝牙耳机", "电视", "扫地机器人", "智能音箱", "投影仪"],
-        "games-software": ["游戏手柄", "Switch游戏", "键盘鼠标", "电竞椅"],
-        "fashion": ["运动鞋", "T恤", "牛仔裤", "包包"],
-        "beauty": ["护肤品", "化妆品", "香水"],
-    }
+    def __init__(self):
+        super().__init__()
+        self.logger = logger.bind(adapter=self.shop_slug)
 
-    # User agents for rotation (realistic desktop browsers)
-    USER_AGENTS = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-    ]
-
-    def __init__(self, page: Optional[Page] = None):
-        """Initialize Taobao adapter with strict rate limiting."""
-        super().__init__(page)
-
-        # Very conservative rate limits (5 RPM)
-        self.rate_limiter.set_domain_limit("s.taobao.com", requests_per_minute=5)
-        self.rate_limiter.set_domain_limit("world.taobao.com", requests_per_minute=5)
-        self.rate_limiter.set_domain_limit("h5.m.taobao.com", requests_per_minute=5)
-
-        self.normalizer = PriceNormalizer()
-        self.classifier = CategoryClassifier()
-
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=3, min=5, max=30),
+        retry=retry_if_exception_type(Exception),
+    )
     async def fetch_deals(self, category: Optional[str] = None) -> List[NormalizedDeal]:
-        """
-        Fetch deals from Taobao using world.taobao.com search.
+        """Fetch deals from Taobao via world.taobao.com search."""
+        context = await self._get_browser_context()
 
-        Args:
-            category: Category slug to search (maps to Chinese keywords)
+        all_deals: List[NormalizedDeal] = []
+        seen_ids: set = set()
 
-        Returns:
-            List of normalized deals (may be empty on failure)
-        """
-        if not self.page:
-            raise ValueError("Browser page not set. Call set_page() first.")
-
-        deals = []
-
-        # Get search keywords for category
         search_terms = self._get_search_terms(category)
 
         for term in search_terms:
+            page = await context.new_page()
             try:
-                # Rate limit before request
-                await self.rate_limiter.wait_if_needed("world.taobao.com")
+                deals = await self._search_and_parse(page, term, category, seen_ids)
+                if deals:
+                    all_deals.extend(deals)
+                    self.logger.info("taobao_deals_found", term=term, count=len(deals))
 
-                # Fetch search results
-                term_deals = await self._fetch_search_results(term, category)
-                deals.extend(term_deals)
-
-                # Random delay between searches (human-like)
+                # Random delay between searches
                 await asyncio.sleep(random.uniform(2.0, 4.0))
 
-                # Limit total deals per category
-                if len(deals) >= 30:
+                if len(all_deals) >= 30:
                     break
-
             except Exception as e:
-                self.logger.error(
-                    f"Failed to fetch deals for term '{term}': {e}",
-                    extra={"category": category, "term": term}
-                )
-                continue
+                self.logger.warning("taobao_search_failed", term=term, error=str(e))
+            finally:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
-        self.logger.info(
-            f"Fetched {len(deals)} deals from Taobao",
-            extra={"category": category}
-        )
-
-        return deals
-
-    async def fetch_product_details(self, external_id: str) -> Optional[NormalizedProduct]:
-        """
-        Fetch detailed product info from item page.
-
-        Note: Often fails due to anti-bot measures. Not critical for deal aggregation.
-
-        Args:
-            external_id: Taobao item ID
-
-        Returns:
-            NormalizedProduct or None on failure
-        """
-        if not self.page:
-            raise ValueError("Browser page not set. Call set_page() first.")
-
-        try:
-            # Rate limit
-            await self.rate_limiter.wait_if_needed("world.taobao.com")
-
-            # Item page URL (world.taobao.com version)
-            url = f"https://world.taobao.com/item/{external_id}.htm"
-
-            # Random user agent
-            await self.page.set_extra_http_headers({
-                "User-Agent": random.choice(self.USER_AGENTS)
-            })
-
-            # Navigate with timeout
-            await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
-
-            # Simulate human behavior
-            await self._simulate_human_behavior(self.page)
-
-            # Wait for product info
-            await self.page.wait_for_selector(".tb-detail-hd", timeout=10000)
-
-            # Parse page
-            html = await self.page.content()
-            soup = BeautifulSoup(html, "html.parser")
-
-            product = self._parse_product_page(soup, external_id)
-            return product
-
-        except PlaywrightTimeout:
-            self.logger.warning(
-                f"Timeout fetching product {external_id} - possible CAPTCHA",
-                extra={"external_id": external_id}
-            )
-            return None
-        except Exception as e:
-            self.logger.error(
-                f"Failed to fetch product details: {e}",
-                extra={"external_id": external_id}
-            )
-            return None
-
-    async def health_check(self) -> bool:
-        """
-        Check if Taobao is accessible (not blocked).
-
-        Returns:
-            True if search page loads, False if blocked/CAPTCHA
-        """
-        if not self.page:
-            return False
-
-        try:
-            await self.rate_limiter.wait_if_needed("world.taobao.com")
-
-            # Try loading search page
-            url = "https://world.taobao.com/search/search.htm?q=test"
-            await self.page.goto(url, wait_until="domcontentloaded", timeout=10000)
-
-            # Check for CAPTCHA indicators
-            html = await self.page.content()
-            if "验证码" in html or "puncha" in html or "slider" in html.lower():
-                self.logger.warning("Taobao CAPTCHA detected during health check")
-                return False
-
-            # Check for search results container
-            has_results = await self.page.locator(".item").count() > 0
-            return has_results
-
-        except Exception as e:
-            self.logger.error(f"Taobao health check failed: {e}")
-            return False
+        self.logger.info("fetched_taobao_deals_total", count=len(all_deals))
+        return all_deals
 
     def _get_search_terms(self, category: Optional[str]) -> List[str]:
         """Get Chinese search terms for category."""
-        if category and category in self.CATEGORY_KEYWORDS:
-            # Return 2-3 terms per category (avoid too many requests)
-            return self.CATEGORY_KEYWORDS[category][:3]
+        if category and category in _CATEGORY_KEYWORDS:
+            return _CATEGORY_KEYWORDS[category][:3]
+        return _DEFAULT_TERMS
 
-        # Default: sample from multiple categories
-        all_terms = []
-        for cat_terms in self.CATEGORY_KEYWORDS.values():
-            all_terms.extend(cat_terms[:1])  # One term per category
-        return all_terms[:5]  # Max 5 terms
-
-    async def _fetch_search_results(
-        self,
-        search_term: str,
-        category_hint: Optional[str]
+    async def _search_and_parse(
+        self, page: Page, term: str, category_hint: Optional[str], seen_ids: set,
     ) -> List[NormalizedDeal]:
-        """Fetch and parse search results for a term."""
+        """Search world.taobao.com and parse results."""
+        url = f"https://world.taobao.com/search/search.htm?q={term}"
+        self.logger.info("taobao_searching", term=term, url=url)
+
+        html = await self._safe_scrape(
+            page, url, _WAIT_SELECTOR,
+            scroll=True, wait_seconds=3.0,
+        )
+
+        # Check for CAPTCHA
+        if "验证码" in html or "puncha" in html:
+            self.logger.warning("taobao_captcha_detected", term=term)
+            return []
+
+        soup = BeautifulSoup(html, "html.parser")
         deals = []
 
-        try:
-            # World Taobao search URL
-            url = f"https://world.taobao.com/search/search.htm?q={search_term}"
+        # Find product items
+        items = soup.select(".item, .product-item, [class*='ContentItem']")[:15]
+        self.logger.info("taobao_items_found", count=len(items))
 
-            # Random user agent
-            await self.page.set_extra_http_headers({
-                "User-Agent": random.choice(self.USER_AGENTS),
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            })
-
-            # Navigate
-            await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
-
-            # Simulate human browsing
-            await self._simulate_human_behavior(self.page)
-
-            # Wait for product items (multiple selectors for resilience)
-            selectors = [".item", ".product-item", ".J_ItemList .item"]
-            loaded = False
-            for selector in selectors:
-                try:
-                    await self.page.wait_for_selector(selector, timeout=8000)
-                    loaded = True
-                    break
-                except PlaywrightTimeout:
-                    continue
-
-            if not loaded:
-                self.logger.warning(f"No products found for term: {search_term}")
-                return []
-
-            # Parse HTML
-            html = await self.page.content()
-
-            # Check for CAPTCHA
-            if "验证码" in html or "puncha" in html:
-                self.logger.warning(f"CAPTCHA triggered for search: {search_term}")
-                return []
-
-            soup = BeautifulSoup(html, "html.parser")
-
-            # Parse product cards (limit to 10 per search)
-            items = soup.select(".item")[:10]
-
-            for item in items:
-                try:
-                    deal = self._normalize_item(item, category_hint)
-                    if deal:
-                        deals.append(deal)
-                except Exception as e:
-                    self.logger.debug(f"Failed to parse item: {e}")
-                    continue
-
-        except PlaywrightTimeout:
-            self.logger.warning(f"Timeout loading search results for: {search_term}")
-        except Exception as e:
-            self.logger.error(f"Error fetching search results: {e}")
+        for item in items:
+            deal = self._parse_item(item, category_hint, seen_ids)
+            if deal:
+                deals.append(deal)
+                seen_ids.add(deal.product.external_id)
 
         return deals
 
-    def _normalize_item(self, item: BeautifulSoup, category_hint: Optional[str]) -> Optional[NormalizedDeal]:
-        """Parse and normalize a product item from search results."""
+    def _parse_item(self, item, category_hint: Optional[str], seen_ids: set) -> Optional[NormalizedDeal]:
+        """Parse a product item from search results."""
         try:
-            # Extract title (multiple selectors)
+            # Title
             title_elem = (
                 item.select_one(".title a") or
-                item.select_one(".item-title") or
+                item.select_one("[class*='title']") or
                 item.select_one("a[title]")
             )
             if not title_elem:
                 return None
 
             title = title_elem.get("title") or title_elem.get_text(strip=True)
-            if not title:
+            if not title or len(title) < 3:
                 return None
 
-            # Extract price (CNY)
+            # Price (CNY)
             price_elem = (
                 item.select_one(".price strong") or
                 item.select_one(".price") or
-                item.select_one(".g_price")
+                item.select_one("[class*='price']")
             )
             if not price_elem:
                 return None
 
             price_text = price_elem.get_text(strip=True)
-            # Parse CNY price (format: ¥123.45 or 123.45)
             price_match = re.search(r'[\d,]+\.?\d*', price_text)
             if not price_match:
                 return None
 
-            price_cny = float(price_match.group().replace(",", ""))
+            price_cny = Decimal(price_match.group().replace(",", ""))
+            if price_cny <= 0:
+                return None
 
             # Convert CNY to KRW
-            price_krw = self.normalizer.to_krw(price_cny, "CNY")
+            current_price = price_cny * _CNY_TO_KRW_FALLBACK
 
-            # Extract link and item ID
+            # Link and item ID
             link_elem = item.select_one("a[href]")
             if not link_elem:
                 return None
 
             link = link_elem.get("href", "")
-            if not link.startswith("http"):
-                link = "https:" + link if link.startswith("//") else "https://world.taobao.com" + link
+            if link.startswith("//"):
+                link = f"https:{link}"
+            elif not link.startswith("http"):
+                link = f"https://world.taobao.com{link}"
 
-            # Extract item ID from link
             item_id_match = re.search(r'id=(\d+)', link)
-            external_id = item_id_match.group(1) if item_id_match else None
-            if not external_id:
+            if not item_id_match:
+                return None
+            external_id = item_id_match.group(1)
+
+            if external_id in seen_ids:
                 return None
 
-            # Extract image
-            img_elem = item.select_one("img")
+            # Image
             image_url = None
+            img_elem = item.select_one("img")
             if img_elem:
                 image_url = img_elem.get("src") or img_elem.get("data-src")
-                if image_url and not image_url.startswith("http"):
-                    image_url = "https:" + image_url
+                if image_url and image_url.startswith("//"):
+                    image_url = f"https:{image_url}"
+                elif image_url and not image_url.startswith("http"):
+                    image_url = None
 
-            # Classify category
-            category = self.classifier.classify(title)
-            if category_hint and not category:
+            category = CategoryClassifier.classify(title)
+            if not category and category_hint:
                 category = category_hint
 
-            # Sales count (if available)
-            sales_elem = item.select_one(".deal-cnt")
-            sales_count = None
-            if sales_elem:
-                sales_text = sales_elem.get_text(strip=True)
-                sales_match = re.search(r'\d+', sales_text)
-                if sales_match:
-                    sales_count = int(sales_match.group())
-
-            return NormalizedDeal(
-                shop_slug=self.shop_slug,
+            product = NormalizedProduct(
                 external_id=external_id,
                 title=title,
-                url=link,
-                current_price=price_krw,
-                original_price=price_krw,  # No original price in search results
-                discount_percentage=0.0,
-                category=category,
+                current_price=current_price,
+                product_url=link,
+                currency="KRW",
                 image_url=image_url,
+                category_hint=category,
+                metadata={"price_cny": float(price_cny), "source": "world.taobao.com"},
+            )
+
+            return NormalizedDeal(
+                product=product,
+                deal_price=current_price,
+                title=title,
+                deal_url=link,
                 deal_type="clearance",
-                starts_at=datetime.utcnow(),
-                ends_at=None,
-                metadata_={
-                    "price_cny": price_cny,
-                    "sales_count": sales_count,
-                    "source": "world.taobao.com",
-                }
+                image_url=image_url,
+                metadata={"price_cny": float(price_cny), "shop": self.shop_name},
             )
 
         except Exception as e:
-            self.logger.debug(f"Error normalizing item: {e}")
+            self.logger.debug("parse_taobao_item_failed", error=str(e))
             return None
 
-    def _parse_product_page(self, soup: BeautifulSoup, external_id: str) -> Optional[NormalizedProduct]:
-        """Parse product details from item page."""
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=2, min=3, max=15),
+        retry=retry_if_exception_type(Exception),
+    )
+    async def fetch_product_details(self, external_id: str) -> Optional[NormalizedProduct]:
+        """Fetch detailed product info from Taobao item page."""
+        context = await self._get_browser_context()
+        page = await context.new_page()
+
         try:
-            # Title
+            url = f"https://world.taobao.com/item/{external_id}.htm"
+            html = await self._safe_scrape(page, url, ".tb-detail-hd, h1, [class*='title']")
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Check for CAPTCHA
+            if "验证码" in html or "puncha" in html:
+                self.logger.warning("taobao_captcha_on_product", external_id=external_id)
+                return None
+
             title_elem = soup.select_one(".tb-detail-hd h1") or soup.select_one("h1")
             if not title_elem:
                 return None
             title = title_elem.get_text(strip=True)
 
-            # Price
             price_elem = soup.select_one(".tb-rmb-num") or soup.select_one(".price strong")
             if not price_elem:
                 return None
@@ -419,66 +273,31 @@ class TaobaoAdapter(BaseScraperAdapter):
             if not price_match:
                 return None
 
-            price_cny = float(price_match.group().replace(",", ""))
-            price_krw = self.normalizer.to_krw(price_cny, "CNY")
+            price_cny = Decimal(price_match.group().replace(",", ""))
+            current_price = price_cny * _CNY_TO_KRW_FALLBACK
 
-            # Image
-            img_elem = soup.select_one(".tb-booth-main img")
             image_url = None
+            img_elem = soup.select_one(".tb-booth-main img, img[src*='taobaocdn']")
             if img_elem:
                 image_url = img_elem.get("src") or img_elem.get("data-src")
-                if image_url and not image_url.startswith("http"):
-                    image_url = "https:" + image_url
-
-            # Category
-            category = self.classifier.classify(title)
+                if image_url and image_url.startswith("//"):
+                    image_url = f"https:{image_url}"
+                elif image_url and not image_url.startswith("http"):
+                    image_url = None
 
             return NormalizedProduct(
-                shop_slug=self.shop_slug,
                 external_id=external_id,
                 title=title,
-                url=f"https://world.taobao.com/item/{external_id}.htm",
-                current_price=price_krw,
-                original_price=price_krw,
-                category=category,
+                current_price=current_price,
+                product_url=url,
+                currency="KRW",
                 image_url=image_url,
-                in_stock=True,
-                metadata_={"price_cny": price_cny}
+                category_hint=CategoryClassifier.classify(title),
+                metadata={"price_cny": float(price_cny), "shop": self.shop_name},
             )
 
         except Exception as e:
-            self.logger.debug(f"Error parsing product page: {e}")
+            self.logger.error("fetch_product_details_failed", external_id=external_id, error=str(e))
             return None
-
-    async def _simulate_human_behavior(self, page: Page):
-        """
-        Simulate human-like browsing to avoid bot detection.
-
-        - Random scrolling
-        - Random mouse movements
-        - Random delays
-        """
-        try:
-            # Random scroll
-            scroll_distance = random.randint(300, 800)
-            await page.evaluate(f"window.scrollBy(0, {scroll_distance})")
-            await asyncio.sleep(random.uniform(0.5, 1.5))
-
-            # Scroll back up a bit
-            await page.evaluate(f"window.scrollBy(0, -{scroll_distance // 2})")
-            await asyncio.sleep(random.uniform(0.3, 0.8))
-
-            # Random mouse movement (if possible)
-            try:
-                await page.mouse.move(
-                    random.randint(100, 500),
-                    random.randint(100, 500)
-                )
-            except Exception:
-                pass  # Mouse movement may not be supported
-
-            # Final delay
-            await asyncio.sleep(random.uniform(0.5, 1.0))
-
-        except Exception as e:
-            self.logger.debug(f"Error simulating human behavior: {e}")
+        finally:
+            await page.close()

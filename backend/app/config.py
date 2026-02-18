@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
+    # External scraper ingest
+    # Set this to a long random string on the Render deployment and on the
+    # local scraper environment.  An empty string disables the endpoint.
+    INGEST_API_KEY: str = ""
+
     # Frontend
     FRONTEND_URL: str = "http://localhost:3000"
     REVALIDATION_SECRET: str = "your-secret-here"

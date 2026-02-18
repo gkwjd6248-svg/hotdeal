@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import alerts, auth, categories, comments, deals, health, products, search, shops, trending
+from app.api.v1 import alerts, auth, categories, comments, deals, health, ingest, products, search, shops, trending
 
 api_v1_router = APIRouter()
 
@@ -16,3 +16,4 @@ api_v1_router.include_router(search.router, prefix="/search", tags=["search"])
 api_v1_router.include_router(trending.router, prefix="/trending", tags=["trending"])
 api_v1_router.include_router(comments.router, prefix="/deals", tags=["comments"])
 api_v1_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
+api_v1_router.include_router(ingest.router, prefix="/ingest", tags=["ingest"])

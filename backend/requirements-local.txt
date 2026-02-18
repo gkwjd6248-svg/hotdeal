@@ -1,0 +1,31 @@
+# Requirements for running the local scraper on a Windows PC.
+#
+# Install:
+#   pip install -r requirements-local.txt
+#   playwright install chromium
+#
+# Then run:
+#   python local_scraper.py --api-key YOUR_KEY
+
+# HTTP client for posting deals to the backend
+httpx==0.28.1
+
+# Playwright for browser-based scraping
+playwright==1.49.1
+
+# HTML parsing
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Structured logging (used by all adapters)
+structlog==24.4.0
+
+# Retry logic used by adapters
+tenacity==9.0.0
+
+# Pydantic / settings used by app.config (loaded indirectly by adapters)
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# python-dotenv so pydantic-settings can read a local .env (optional)
+python-dotenv==1.0.1

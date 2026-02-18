@@ -47,7 +47,7 @@ export default function Footer() {
                 이용약관
               </Link>
               <Link
-                href="https://github.com/yourusername/dealhawk"
+                href="https://github.com/gkwjd6248-svg/hotdeal"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-gray-500 transition-colors hover:text-gray-300"

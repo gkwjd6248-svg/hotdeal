@@ -74,7 +74,7 @@ export default function Header() {
               </>
             )}
             <Link
-              href="https://github.com/yourusername/dealhawk"
+              href="https://github.com/gkwjd6248-svg/hotdeal"
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-lg border border-border p-2 text-gray-500 transition-all hover:border-gray-600 hover:bg-card hover:text-gray-300"

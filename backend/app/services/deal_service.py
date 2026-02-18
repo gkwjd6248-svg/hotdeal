@@ -270,7 +270,7 @@ class DealService:
         )
         deal = existing.scalar_one_or_none()
 
-        # Get category slug for AI scoring
+        # Get category slug and shop slug for AI scoring
         category_slug = None
         if category_id:
             cat_result = await self.db.execute(
@@ -278,12 +278,20 @@ class DealService:
             )
             category_slug = cat_result.scalar_one_or_none()
 
-        # Compute AI score
+        shop_slug = None
+        shop_result = await self.db.execute(
+            select(Shop.slug).where(Shop.id == shop_id)
+        )
+        shop_slug = shop_result.scalar_one_or_none()
+
+        # Compute AI score (pass title + shop_slug for keyword/reliability scoring)
         score_result = await self.price_analyzer.compute_deal_score(
             product_id=product_id,
             current_price=deal_price,
             original_price=original_price,
             category_slug=category_slug,
+            title=title,
+            shop_slug=shop_slug,
         )
 
         self.logger.info(

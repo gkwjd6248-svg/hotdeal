@@ -336,6 +336,80 @@ async def seed_shops(
 
 
 # ---------------------------------------------------------------------------
+# Seed categories
+# ---------------------------------------------------------------------------
+
+ALL_CATEGORIES = [
+    {"name": "PC/하드웨어", "name_en": "PC/Hardware", "slug": "pc-hardware", "icon": "Cpu", "sort_order": 1},
+    {"name": "상품권/쿠폰", "name_en": "Gift Cards", "slug": "gift-cards", "icon": "Gift", "sort_order": 2},
+    {"name": "게임/SW", "name_en": "Games/SW", "slug": "games-software", "icon": "Gamepad2", "sort_order": 3},
+    {"name": "노트북/모바일", "name_en": "Laptop/Mobile", "slug": "laptop-mobile", "icon": "Smartphone", "sort_order": 4},
+    {"name": "가전/TV", "name_en": "Electronics/TV", "slug": "electronics-tv", "icon": "Tv", "sort_order": 5},
+    {"name": "패션/뷰티", "name_en": "Fashion/Beauty", "slug": "fashion-beauty", "icon": "Shirt", "sort_order": 6},
+    {"name": "생활/식품", "name_en": "Living/Food", "slug": "living-food", "icon": "ShoppingBasket", "sort_order": 7},
+]
+
+
+class SeedCategoriesRequest(BaseModel):
+    api_key: str
+
+
+class SeedCategoriesResponse(BaseModel):
+    status: str = "success"
+    created: List[str] = []
+    already_existed: List[str] = []
+
+
+@router.post(
+    "/seed-categories",
+    response_model=SeedCategoriesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Seed all category records into the database",
+    tags=["ingest"],
+)
+async def seed_categories(
+    body: SeedCategoriesRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SeedCategoriesResponse:
+    """Create missing category records."""
+    _verify_api_key(body.api_key)
+
+    from app.models.category import Category
+
+    created: List[str] = []
+    already_existed: List[str] = []
+
+    for cat_data in ALL_CATEGORIES:
+        slug = cat_data["slug"]
+        result = await db.execute(select(Category).where(Category.slug == slug))
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            already_existed.append(slug)
+            continue
+
+        cat = Category(
+            name=cat_data["name"],
+            name_en=cat_data["name_en"],
+            slug=slug,
+            icon=cat_data.get("icon"),
+            sort_order=cat_data.get("sort_order", 0),
+        )
+        db.add(cat)
+        created.append(slug)
+
+    await db.commit()
+
+    logger.info("seed_categories_complete", created=created, already_existed=already_existed)
+
+    return SeedCategoriesResponse(
+        status="success",
+        created=created,
+        already_existed=already_existed,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Data migration: fix image URLs + re-classify categories
 # ---------------------------------------------------------------------------
 
@@ -396,33 +470,31 @@ async def migrate_fix(
     cat_result = await db.execute(select(Category.slug, Category.id))
     cat_map = {row[0]: row[1] for row in cat_result.all()}
 
-    # --- 3. Re-classify products with no category ---
+    # --- 3. Re-classify ALL products (fix wrong + assign missing) ---
     products_fixed = 0
-    result = await db.execute(
-        select(Product.id, Product.title).where(Product.category_id.is_(None))
-    )
-    for prod_id, title in result.all():
+    result = await db.execute(select(Product.id, Product.title, Product.category_id))
+    for prod_id, title, old_cat_id in result.all():
         slug = CategoryClassifier.classify(title)
-        if slug and slug in cat_map:
+        new_cat_id = cat_map.get(slug) if slug else None
+        if new_cat_id != old_cat_id:
             await db.execute(
                 update(Product)
                 .where(Product.id == prod_id)
-                .values(category_id=cat_map[slug])
+                .values(category_id=new_cat_id)
             )
             products_fixed += 1
 
-    # --- 4. Re-classify deals with no category ---
+    # --- 4. Re-classify ALL deals (fix wrong + assign missing) ---
     deals_fixed = 0
-    result = await db.execute(
-        select(Deal.id, Deal.title).where(Deal.category_id.is_(None))
-    )
-    for deal_id, title in result.all():
+    result = await db.execute(select(Deal.id, Deal.title, Deal.category_id))
+    for deal_id, title, old_cat_id in result.all():
         slug = CategoryClassifier.classify(title)
-        if slug and slug in cat_map:
+        new_cat_id = cat_map.get(slug) if slug else None
+        if new_cat_id != old_cat_id:
             await db.execute(
                 update(Deal)
                 .where(Deal.id == deal_id)
-                .values(category_id=cat_map[slug])
+                .values(category_id=new_cat_id)
             )
             deals_fixed += 1
 

@@ -85,7 +85,8 @@ CATEGORIES = [
     {"id": str(uuid.uuid4()), "name": "게임/SW", "slug": "games-software", "icon": "Gamepad2", "sort_order": 3, "deal_count": 1},
     {"id": str(uuid.uuid4()), "name": "노트북/모바일", "slug": "laptop-mobile", "icon": "Smartphone", "sort_order": 4, "deal_count": 3},
     {"id": str(uuid.uuid4()), "name": "가전/TV", "slug": "electronics-tv", "icon": "Tv", "sort_order": 5, "deal_count": 4},
-    {"id": str(uuid.uuid4()), "name": "생활/식품", "slug": "living-food", "icon": "ShoppingBasket", "sort_order": 6, "deal_count": 1},
+    {"id": str(uuid.uuid4()), "name": "패션/뷰티", "slug": "fashion-beauty", "icon": "Shirt", "sort_order": 6, "deal_count": 1},
+    {"id": str(uuid.uuid4()), "name": "생활/식품", "slug": "living-food", "icon": "ShoppingBasket", "sort_order": 7, "deal_count": 1},
 ]
 
 now = datetime.now(timezone.utc)

@@ -11,6 +11,7 @@ import {
   Gamepad2,
   CreditCard,
   UtensilsCrossed,
+  Shirt,
   Tag,
 } from "lucide-react";
 
@@ -30,6 +31,7 @@ function getIconForSlug(slug: string, _icon?: string) {
     "electronics-tv": Tv,
     "games-software": Gamepad2,
     "gift-cards": CreditCard,
+    "fashion-beauty": Shirt,
     "living-food": UtensilsCrossed,
     all: ShoppingBag,
   };

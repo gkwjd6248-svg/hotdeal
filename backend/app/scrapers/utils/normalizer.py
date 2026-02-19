@@ -14,54 +14,71 @@ logger = structlog.get_logger()
 # Keyword-based category classifier for automatic categorization
 CATEGORY_KEYWORDS = {
     "pc-hardware": [
-        # GPUs
-        "그래픽카드", "GPU", "RTX", "GTX", "Radeon", "RX",
-        # CPUs
-        "CPU", "프로세서", "라이젠", "Ryzen", "인텔", "Intel", "i3", "i5", "i7", "i9",
+        # GPUs (avoid short "RX" - too many false positives in Korean text)
+        "그래픽카드", "GPU", "RTX ", "GTX ", "Radeon",
+        # CPUs (use space-suffixed to avoid false matches like "birx", "미i3")
+        "CPU", "프로세서", "라이젠", "Ryzen", "인텔 ", "Intel ",
         # Storage
-        "SSD", "NVMe", "HDD", "하드", "M.2",
+        "SSD", "NVMe", "HDD", "M.2",
         # Memory
-        "RAM", "DDR5", "DDR4", "메모리",
+        "RAM", "DDR5", "DDR4",
         # Motherboards
-        "메인보드", "motherboard", "마더보드",
+        "메인보드", "마더보드",
         # PSU
-        "파워서플라이", "파워", "PSU",
-        # Cases & Cooling
-        "케이스", "쿨러", "수냉", "공랭",
+        "파워서플라이",
+        # Cooling
+        "수냉쿨러", "공랭쿨러",
     ],
     "laptop-mobile": [
         # Laptops
-        "노트북", "laptop", "맥북", "MacBook", "갤럭시북", "그램", "LG그램",
+        "노트북", "laptop", "맥북", "MacBook", "갤럭시북", "LG그램",
         # Smartphones
-        "스마트폰", "갤럭시", "Galaxy", "iPhone", "아이폰", "아이폰15", "아이폰14",
+        "스마트폰", "갤럭시 S", "갤럭시 Z", "Galaxy S", "Galaxy Z",
+        "iPhone", "아이폰",
         # Tablets
         "태블릿", "iPad", "아이패드", "갤럭시탭",
     ],
     "electronics-tv": [
         # TVs & Monitors
-        "TV", "텔레비전", "모니터", "monitor", "디스플레이", "OLED", "QLED",
+        "TV", "텔레비전", "모니터", "디스플레이", "OLED", "QLED",
         # Home Appliances
         "세탁기", "냉장고", "에어컨", "건조기", "청소기", "공기청정기", "로봇청소기",
-        "전자레인지", "식기세척기", "정수기",
+        "전자레인지", "식기세척기", "정수기", "에어프라이어",
+        # Audio
+        "이어폰", "헤드폰", "스피커", "사운드바",
     ],
     "games-software": [
         # Games
         "게임", "game", "Steam", "스팀",
         # Consoles
         "PS5", "플레이스테이션", "PlayStation", "Xbox", "엑스박스",
-        "닌텐도", "Nintendo", "스위치", "Switch",
+        "닌텐도", "Nintendo",
         # Software
         "소프트웨어", "라이선스", "윈도우", "Windows", "오피스", "Office",
     ],
     "gift-cards": [
-        "상품권", "기프트카드", "gift card", "쿠폰", "포인트", "캐시",
+        "상품권", "기프트카드", "gift card", "쿠폰", "포인트",
         "문화상품권", "해피머니", "북앤라이프", "스타벅스",
+    ],
+    "fashion-beauty": [
+        # Fashion
+        "원피스", "드레스", "블라우스", "티셔츠", "셔츠", "자켓", "코트",
+        "패딩", "점퍼", "바지", "청바지", "스커트", "니트", "가디건",
+        "운동화", "스니커즈", "구두", "샌들", "슬리퍼", "부츠",
+        "가방", "백팩", "핸드백", "지갑", "벨트", "모자",
+        # Beauty
+        "화장품", "스킨케어", "로션", "세럼", "선크림", "마스크팩",
+        "립스틱", "파운데이션", "향수",
+        # Brands
+        "나이키", "아디다스", "뉴발란스", "Nike", "Adidas",
     ],
     "living-food": [
         # Food & Beverage
         "식품", "생수", "과자", "커피", "라면", "음료", "간식", "건강식품", "영양제",
-        # Living
+        "선물세트", "과일", "정육", "수산", "반찬", "견과", "초콜릿",
+        # Living & Household
         "세제", "화장지", "샴푸", "비누", "주방", "욕실", "세탁",
+        "수건", "침구", "이불", "베개", "매트리스",
     ],
 }
 

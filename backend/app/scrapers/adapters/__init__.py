@@ -24,6 +24,9 @@ from .interpark import InterparkAdapter
 from .musinsa import MusinsaAdapter
 from .ssf import SSFAdapter
 from .taobao import TaobaoAdapter
+from .aliexpress_browser import AliExpressBrowserAdapter
+from .temu import TemuAdapter
+from .amazon_browser import AmazonBrowserAdapter
 
 __all__ = [
     # API adapters
@@ -45,4 +48,7 @@ __all__ = [
     "MusinsaAdapter",
     "SSFAdapter",
     "TaobaoAdapter",
+    "AliExpressBrowserAdapter",
+    "TemuAdapter",
+    "AmazonBrowserAdapter",
 ]

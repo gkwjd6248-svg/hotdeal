@@ -1,5 +1,9 @@
+
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 import { Deal } from "@/lib/types";
 import PriceDisplay from "@/components/common/PriceDisplay";
 import RelativeTime from "@/components/common/RelativeTime";
@@ -37,6 +41,8 @@ function AiScoreBadge({ score }: { score: number }) {
 }
 
 export default function DealCard({ deal, featured = false }: DealCardProps) {
+  const [imgError, setImgError] = useState(false);
+
   const discountPercentage =
     deal.discount_percentage ??
     (deal.original_price && deal.original_price > deal.deal_price
@@ -52,13 +58,14 @@ export default function DealCard({ deal, featured = false }: DealCardProps) {
       <article className={`${cardClass} relative h-full overflow-hidden`}>
         {/* Image container */}
         <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-lg bg-surface">
-          {deal.image_url ? (
+          {deal.image_url && !imgError ? (
             <Image
               src={deal.image_url}
               alt={deal.title}
               fill
               className="object-cover transition-transform duration-500 group-hover:scale-[1.08]"
               sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, (max-width: 1440px) 33vw, 25vw"
+              onError={() => setImgError(true)}
             />
           ) : (
             <div className="flex h-full items-center justify-center bg-gradient-to-br from-surface to-card-hover">
@@ -97,7 +104,9 @@ export default function DealCard({ deal, featured = false }: DealCardProps) {
             originalPrice={deal.original_price}
             discountPercentage={discountPercentage}
             showBadge={false}
+            showSavings={true}
             size="md"
+            dealType={deal.deal_type}
           />
 
           {/* Meta info row */}

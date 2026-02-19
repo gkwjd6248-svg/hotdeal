@@ -50,10 +50,19 @@ export default function Header() {
               <>
                 {user ? (
                   <div className="flex items-center gap-2">
-                    <div className="hidden sm:flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5">
+                    <Link
+                      href="/profile"
+                      className="hidden sm:flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 transition-all hover:border-accent/30 hover:bg-card-hover"
+                    >
                       <User className="h-3.5 w-3.5 text-accent" />
                       <span className="text-sm font-medium text-gray-200">{user.username}</span>
-                    </div>
+                    </Link>
+                    <Link
+                      href="/profile"
+                      className="sm:hidden rounded-lg border border-border bg-card p-1.5 text-gray-400 transition-all hover:border-accent/30 hover:text-accent"
+                    >
+                      <User className="h-4 w-4" />
+                    </Link>
                     <button
                       onClick={logout}
                       className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-gray-400 transition-all hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"

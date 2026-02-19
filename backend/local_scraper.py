@@ -84,6 +84,9 @@ try:
     from app.scrapers.adapters.musinsa import MusinsaAdapter
     from app.scrapers.adapters.ssf import SSFAdapter
     from app.scrapers.adapters.taobao import TaobaoAdapter
+    from app.scrapers.adapters.aliexpress_browser import AliExpressBrowserAdapter
+    from app.scrapers.adapters.temu import TemuAdapter
+    from app.scrapers.adapters.amazon_browser import AmazonBrowserAdapter
 except ImportError as exc:
     print(f"[오류] 어댑터 임포트 실패: {exc}")
     print("       backend/ 디렉터리에서 실행하고 있는지 확인하세요.")
@@ -132,20 +135,34 @@ BROWSER_SHOP_REGISTRY: Dict[str, Any] = {
     "musinsa": MusinsaAdapter,
     "ssf": SSFAdapter,
     "taobao": TaobaoAdapter,
+    "aliexpress": AliExpressBrowserAdapter,
+    "temu": TemuAdapter,
+    "amazon": AmazonBrowserAdapter,
 }
 
-# Stealth JS injected into every browser context
-_STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko', 'en-US', 'en'] });
-Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-window.chrome = { runtime: {} };
+# Shops that need image loading (anti-bot detects image blocking)
+_NO_IMAGE_BLOCK = {"aliexpress", "temu", "amazon"}
+
+# Shops that need a non-Korean locale (e.g. Amazon redirects ko-KR)
+_SHOP_LOCALES = {"amazon": "en-US"}
+
+# Stealth JS template — {languages_json} is replaced per-context
+_STEALTH_JS_TEMPLATE = """
+Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }});
+Object.defineProperty(navigator, 'languages', {{ get: () => {languages_json} }});
+Object.defineProperty(navigator, 'plugins', {{ get: () => [1, 2, 3, 4, 5] }});
+window.chrome = {{ runtime: {{}} }};
 const originalQuery = window.navigator.permissions.query;
 window.navigator.permissions.query = (parameters) =>
   parameters.name === 'notifications'
-    ? Promise.resolve({ state: Notification.permission })
+    ? Promise.resolve({{ state: Notification.permission }})
     : originalQuery(parameters);
 """
+
+_LOCALE_LANGUAGES = {
+    "ko-KR": "['ko-KR', 'ko', 'en-US', 'en']",
+    "en-US": "['en-US', 'en', 'ko-KR', 'ko']",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -199,27 +216,34 @@ def deal_to_dict(deal: NormalizedDeal) -> Dict[str, Any]:
 async def _create_browser_context(
     browser: Browser,
     block_images: bool = True,
+    locale: str = "ko-KR",
 ) -> BrowserContext:
     """Create an anti-detection browser context.
 
     Args:
         browser: Launched Playwright Browser instance.
         block_images: Whether to block image/font requests for speed.
+        locale: Browser locale (e.g. "ko-KR", "en-US").
 
     Returns:
         Configured BrowserContext.
     """
+    # Match timezone to locale to avoid fingerprint mismatch
+    timezone_id = "America/New_York" if locale.startswith("en") else "Asia/Seoul"
+
     context = await browser.new_context(
         user_agent=get_random_user_agent(),
         viewport={"width": 1920, "height": 1080},
-        locale="ko-KR",
-        timezone_id="Asia/Seoul",
+        locale=locale,
+        timezone_id=timezone_id,
         java_script_enabled=True,
         bypass_csp=True,
     )
 
-    # Inject navigator stealth patches
-    await context.add_init_script(_STEALTH_JS)
+    # Inject navigator stealth patches (locale-aware)
+    languages_json = _LOCALE_LANGUAGES.get(locale, _LOCALE_LANGUAGES["ko-KR"])
+    stealth_js = _STEALTH_JS_TEMPLATE.format(languages_json=languages_json)
+    await context.add_init_script(stealth_js)
 
     # Block heavy resources to speed up scraping
     if block_images:
@@ -373,7 +397,9 @@ async def scrape_shop(
     print(f"\n[{shop_slug}] 스크래핑 시작...")
 
     # Create a fresh browser context per shop for isolation
-    context = await _create_browser_context(browser)
+    block_images = shop_slug not in _NO_IMAGE_BLOCK
+    locale = _SHOP_LOCALES.get(shop_slug, "ko-KR")
+    context = await _create_browser_context(browser, block_images=block_images, locale=locale)
 
     try:
         # Instantiate adapter and inject dependencies
@@ -483,6 +509,121 @@ async def scrape_shop(
             await context.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Post-processing: dedup, cheapest-only, image filter
+# ---------------------------------------------------------------------------
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize a product title for fuzzy comparison.
+
+    Strips whitespace, lowercases, removes common noise words and punctuation
+    so that "Samsung Galaxy S25 Ultra 256GB" matches across shops.
+    """
+    import re as _re
+    t = title.lower().strip()
+    # Remove common prefixes injected by scrapers
+    for noise in [
+        "인기 추천", "국내발송", "새 탭", "새 탭에서 열기", "쿠폰적용가",
+        "타임딜 특가", "할인 전 금액", "무료배송",
+    ]:
+        t = t.replace(noise.lower(), "")
+    # Remove brackets and their contents: [국내발송], (정품) etc
+    t = _re.sub(r'[\[\(【].*?[\]\)】]', '', t)
+    # Remove non-alphanumeric (keep Korean, English, digits)
+    t = _re.sub(r'[^가-힣a-z0-9\s]', ' ', t)
+    # Collapse whitespace
+    t = _re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _title_similarity(a: str, b: str) -> float:
+    """Compute Jaccard similarity between two normalized titles."""
+    words_a = set(a.split())
+    words_b = set(b.split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union)
+
+
+def dedup_cross_shop(
+    all_deals: Dict[str, List[Dict[str, Any]]],
+    similarity_threshold: float = 0.55,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Remove cross-shop duplicates, keeping the cheapest for each product.
+
+    Also filters out deals without images.
+
+    Args:
+        all_deals: {shop_slug: [deal_dict, ...]}
+        similarity_threshold: Title similarity above which two deals are
+            considered the same product.
+
+    Returns:
+        Filtered {shop_slug: [deal_dict, ...]} with duplicates removed.
+    """
+    # Flatten all deals with shop info and normalized titles
+    flat: List[Dict[str, Any]] = []
+    for shop_slug, deals in all_deals.items():
+        for deal in deals:
+            # Filter: must have image
+            if not deal.get("image_url"):
+                continue
+            # Filter: must have valid price
+            price = deal.get("deal_price", 0)
+            if not price or price <= 0:
+                continue
+            flat.append({
+                **deal,
+                "_shop": shop_slug,
+                "_norm_title": _normalize_title(deal.get("title", "")),
+                "_price": float(price),
+            })
+
+    # Group similar products
+    groups: List[List[Dict[str, Any]]] = []
+    used = [False] * len(flat)
+
+    for i, deal_i in enumerate(flat):
+        if used[i]:
+            continue
+        group = [deal_i]
+        used[i] = True
+
+        for j in range(i + 1, len(flat)):
+            if used[j]:
+                continue
+            sim = _title_similarity(deal_i["_norm_title"], flat[j]["_norm_title"])
+            if sim >= similarity_threshold:
+                group.append(flat[j])
+                used[j] = True
+
+        groups.append(group)
+
+    # For each group, pick the cheapest deal
+    result: Dict[str, List[Dict[str, Any]]] = {slug: [] for slug in all_deals}
+    total_before = len(flat)
+    total_after = 0
+
+    for group in groups:
+        cheapest = min(group, key=lambda d: d["_price"])
+        shop = cheapest["_shop"]
+        # Remove internal keys before returning
+        clean = {k: v for k, v in cheapest.items() if not k.startswith("_")}
+        result[shop].append(clean)
+        total_after += 1
+
+    removed = total_before - total_after
+    if removed > 0:
+        print(f"\n[중복 제거] 이미지 없는 딜 제외 후 {total_before}개 → 최저가만 {total_after}개 (중복 {removed}개 제거)")
+    else:
+        print(f"\n[중복 제거] {total_after}개 딜 (중복 없음)")
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +765,10 @@ async def main(
     rate_limiter = DomainRateLimiter()
     results: List[ShopResult] = []
 
+    # Phase 1: Scrape all shops and collect raw deals
+    scraped_deals: Dict[str, List[Dict[str, Any]]] = {}
+    shop_raw_counts: Dict[str, int] = {}
+
     async with async_playwright() as playwright:
         print("[브라우저] Chromium 실행 중...")
         browser = await playwright.chromium.launch(
@@ -636,27 +781,135 @@ async def main(
         )
         print("[브라우저] Chromium 실행 완료\n")
 
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
-            for shop_slug in shops:
-                adapter_class = BROWSER_SHOP_REGISTRY.get(shop_slug)
-                if adapter_class is None:
-                    print(f"[{shop_slug}] 알 수 없는 쇼핑몰 — 건너뜀")
-                    continue
+        for shop_slug in shops:
+            adapter_class = BROWSER_SHOP_REGISTRY.get(shop_slug)
+            if adapter_class is None:
+                print(f"[{shop_slug}] 알 수 없는 쇼핑몰 — 건너뜀")
+                continue
 
-                result = await scrape_shop(
-                    shop_slug=shop_slug,
-                    adapter_class=adapter_class,
-                    browser=browser,
-                    rate_limiter=rate_limiter,
-                    backend_url=backend_url,
-                    api_key=api_key,
-                    http_client=http_client,
-                    dry_run=dry_run,
-                )
-                results.append(result)
+            start_time = time.monotonic()
+            print(f"\n[{shop_slug}] 스크래핑 시작...")
+
+            block_images = shop_slug not in _NO_IMAGE_BLOCK
+            locale = _SHOP_LOCALES.get(shop_slug, "ko-KR")
+            context = await _create_browser_context(browser, block_images=block_images, locale=locale)
+
+            try:
+                adapter = adapter_class()
+                adapter.rate_limiter = rate_limiter
+                adapter.browser_context = context
+
+                deals: List[NormalizedDeal] = await adapter.fetch_deals()
+                print(f"[{shop_slug}] {len(deals)}개 딜 발견")
+                shop_raw_counts[shop_slug] = len(deals)
+
+                deal_dicts = []
+                for deal in deals:
+                    try:
+                        deal_dicts.append(deal_to_dict(deal))
+                    except Exception as exc:
+                        log.warning("deal_conversion_failed", shop=shop_slug, error=str(exc))
+
+                scraped_deals[shop_slug] = deal_dicts
+
+            except Exception as exc:
+                elapsed = time.monotonic() - start_time
+                log.error("shop_scrape_failed", shop=shop_slug, error=str(exc))
+                print(f"[{shop_slug}] 스크래핑 실패: {exc}")
+                scraped_deals[shop_slug] = []
+                shop_raw_counts[shop_slug] = 0
+                results.append(ShopResult(
+                    shop_slug=shop_slug, deals_found=0, deals_sent=0,
+                    deals_accepted=0, deals_rejected=0,
+                    elapsed_seconds=elapsed, error=str(exc),
+                ))
+            finally:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
         print("\n[브라우저] 종료 중...")
         await browser.close()
+
+    # Phase 2: Cross-shop dedup — keep cheapest, filter no-image
+    deduped = dedup_cross_shop(scraped_deals)
+
+    # Phase 3: Send or display results
+    async with httpx.AsyncClient(timeout=60.0) as http_client:
+        for shop_slug in shops:
+            if shop_slug not in deduped:
+                continue
+            deal_dicts = deduped[shop_slug]
+            raw_count = shop_raw_counts.get(shop_slug, 0)
+
+            if not deal_dicts and raw_count == 0:
+                # Already added error result above
+                continue
+
+            start_time = time.monotonic()
+
+            if dry_run:
+                def _safe(s: str) -> str:
+                    return s.replace('\xa0', ' ').encode('cp949', 'replace').decode('cp949')
+
+                print(f"\n[{shop_slug}] [DRY RUN] 원본 {raw_count}개 → 필터 후 {len(deal_dicts)}개:")
+                for i, sample in enumerate(deal_dicts[:5]):
+                    orig = sample.get('original_price')
+                    pct = sample.get('discount_percentage')
+                    title = _safe(sample.get('title', 'N/A'))[:60]
+                    price_str = f"     가격: {sample.get('deal_price', 0):,.0f}원"
+                    if orig and pct:
+                        price_str += f" (원래 {orig:,.0f}원, -{pct:.0f}%)"
+                    elif orig:
+                        savings = orig - sample.get('deal_price', 0)
+                        price_str += f" (원래 {orig:,.0f}원, {savings:,.0f}원 절약)"
+                    print(f"  {i+1}. {title}")
+                    print(price_str)
+                if len(deal_dicts) > 5:
+                    print(f"  ... 외 {len(deal_dicts)-5}개")
+
+                results.append(ShopResult(
+                    shop_slug=shop_slug,
+                    deals_found=raw_count,
+                    deals_sent=0,
+                    deals_accepted=0,
+                    deals_rejected=0,
+                    elapsed_seconds=time.monotonic() - start_time,
+                ))
+            else:
+                # POST to backend
+                print(f"[{shop_slug}] 백엔드에 {len(deal_dicts)}개 딜 전송 중...")
+                result = await post_deals_to_backend(
+                    deals=deal_dicts,
+                    shop_slug=shop_slug,
+                    backend_url=backend_url,
+                    api_key=api_key,
+                    http_client=http_client,
+                )
+
+                if result["error"]:
+                    print(f"[{shop_slug}] 전송 오류: {result['error']}")
+                else:
+                    stats = result.get("stats", {})
+                    print(
+                        f"[{shop_slug}] 전송 완료: "
+                        f"상품생성={stats.get('products_created', 0)}개 "
+                        f"상품갱신={stats.get('products_updated', 0)}개 "
+                        f"딜생성={stats.get('deals_created', 0)}개 "
+                        f"딜건너뜀={stats.get('deals_skipped', 0)}개 "
+                        f"오류={stats.get('errors', 0)}개"
+                    )
+
+                results.append(ShopResult(
+                    shop_slug=shop_slug,
+                    deals_found=raw_count,
+                    deals_sent=result["sent"],
+                    deals_accepted=result["accepted"],
+                    deals_rejected=result["rejected"],
+                    elapsed_seconds=time.monotonic() - start_time,
+                    error=result["error"],
+                ))
 
     print_summary(results, dry_run=dry_run)
 

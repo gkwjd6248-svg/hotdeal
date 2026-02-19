@@ -265,6 +265,7 @@ ALL_SHOPS: List[Dict[str, Any]] = [
     {"name": "뉴에그", "name_en": "Newegg", "slug": "newegg", "base_url": "https://www.newegg.com", "adapter_type": "api", "scrape_interval_minutes": 180, "country": "US", "currency": "USD"},
     # --- International scraper-based ---
     {"name": "타오바오", "name_en": "Taobao", "slug": "taobao", "base_url": "https://www.taobao.com", "adapter_type": "scraper", "scrape_interval_minutes": 180, "country": "CN", "currency": "CNY"},
+    {"name": "테무", "name_en": "Temu", "slug": "temu", "base_url": "https://www.temu.com", "adapter_type": "scraper", "scrape_interval_minutes": 120, "country": "CN", "currency": "KRW"},
 ]
 
 

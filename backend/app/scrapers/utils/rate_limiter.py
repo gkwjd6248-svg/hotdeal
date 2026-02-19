@@ -83,6 +83,11 @@ class DomainRateLimiter:
         "www.newegg.com": 15,
         "s.taobao.com": 5,
         "world.taobao.com": 5,
+        # International browser-based scraping
+        "ko.aliexpress.com": 5,
+        "www.aliexpress.com": 5,
+        "www.temu.com": 5,
+        "www.amazon.com": 3,  # Amazon has the strongest bot detection
     }
 
     # Default rate limit for unknown domains

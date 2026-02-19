@@ -273,16 +273,9 @@ export default async function DealDetailPage({ params }: DealDetailPageProps) {
                 discountPercentage={deal.discount_percentage}
                 size="lg"
                 showBadge={true}
+                showSavings={true}
+                dealType={deal.deal_type}
               />
-              {deal.original_price && deal.original_price > deal.deal_price && (
-                <p className="mt-2 text-xs text-gray-500">
-                  정상가 대비{" "}
-                  <span className="font-semibold text-price-deal">
-                    {(deal.original_price - deal.deal_price).toLocaleString()}원
-                  </span>{" "}
-                  절약
-                </p>
-              )}
             </div>
 
             {/* AI Score */}

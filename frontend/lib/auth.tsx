@@ -11,6 +11,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, username: string, password: string) => Promise<void>;
   logout: () => void;
+  resetPassword: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -102,8 +103,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     delete apiClient.defaults.headers.common["Authorization"];
   }, []);
 
+  const resetPassword = useCallback(async (email: string) => {
+    const response = await apiClient.post<ApiResponse<{ message: string }>>("/auth/reset-password", { email });
+    if (response.data.status !== "success") {
+      throw new Error("비밀번호 재설정 요청에 실패했습니다");
+    }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, register, logout, resetPassword }}>
       {children}
     </AuthContext.Provider>
   );

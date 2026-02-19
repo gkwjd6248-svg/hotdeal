@@ -644,6 +644,18 @@ async def login(body: LoginBody):
     }
 
 
+class ResetPasswordBody(BaseModel):
+    email: str
+
+
+@app.post("/api/v1/auth/reset-password")
+async def reset_password(body: ResetPasswordBody):
+    return {
+        "status": "success",
+        "data": {"message": "비밀번호 재설정 링크가 이메일로 전송되었습니다"},
+    }
+
+
 @app.get("/api/v1/auth/me")
 async def get_me(authorization: Optional[str] = Header(None)):
     user = _get_mock_user(authorization)

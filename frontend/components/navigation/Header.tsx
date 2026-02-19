@@ -5,12 +5,9 @@ import { Flame, Github, LogOut, User, Zap } from "lucide-react";
 import SearchBar from "@/components/search/SearchBar";
 import CategoryTabs from "./CategoryTabs";
 import { useAuth } from "@/lib/auth";
-import { useState } from "react";
-import AuthModal from "@/components/auth/AuthModal";
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth();
-  const [showAuthModal, setShowAuthModal] = useState(false);
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-lg shadow-black/20">
@@ -73,12 +70,12 @@ export default function Header() {
                     </button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => setShowAuthModal(true)}
+                  <Link
+                    href="/login"
                     className="btn-primary px-4 py-1.5 text-sm"
                   >
                     로그인
-                  </button>
+                  </Link>
                 )}
               </>
             )}
@@ -98,8 +95,6 @@ export default function Header() {
         <CategoryTabs />
       </div>
 
-      {/* Auth Modal */}
-      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </header>
   );
 }

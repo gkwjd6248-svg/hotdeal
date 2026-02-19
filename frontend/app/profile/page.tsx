@@ -2,11 +2,10 @@
 
 import { useAuth } from "@/lib/auth";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   User,
   Mail,
-  Calendar,
   LogOut,
   Shield,
   Bell,
@@ -16,18 +15,16 @@ import {
   Settings,
 } from "lucide-react";
 import Link from "next/link";
-import AuthModal from "@/components/auth/AuthModal";
 
 export default function ProfilePage() {
   const { user, logout, isLoading } = useAuth();
   const router = useRouter();
-  const [showAuthModal, setShowAuthModal] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !user) {
-      setShowAuthModal(true);
+      router.replace("/login");
     }
-  }, [isLoading, user]);
+  }, [isLoading, user, router]);
 
   if (isLoading) {
     return (
@@ -39,25 +36,16 @@ export default function ProfilePage() {
 
   if (!user) {
     return (
-      <>
-        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-4">
-          <User className="h-16 w-16 text-gray-600" />
-          <h1 className="text-xl font-bold text-white">로그인이 필요합니다</h1>
-          <p className="text-sm text-gray-400">
-            프로필을 확인하려면 먼저 로그인해주세요.
-          </p>
-          <button
-            onClick={() => setShowAuthModal(true)}
-            className="btn-primary px-6 py-2.5"
-          >
-            로그인 / 회원가입
-          </button>
-        </div>
-        <AuthModal
-          isOpen={showAuthModal}
-          onClose={() => setShowAuthModal(false)}
-        />
-      </>
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-4">
+        <User className="h-16 w-16 text-gray-600" />
+        <h1 className="text-xl font-bold text-white">로그인이 필요합니다</h1>
+        <p className="text-sm text-gray-400">
+          프로필을 확인하려면 먼저 로그인해주세요.
+        </p>
+        <Link href="/login" className="btn-primary px-6 py-2.5">
+          로그인 / 회원가입
+        </Link>
+      </div>
     );
   }
 

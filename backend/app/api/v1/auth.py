@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_current_user
 from app.models.user import User
+from pydantic import BaseModel
+
 from app.schemas.auth import (
     LoginRequest,
     RegisterRequest,
@@ -68,4 +70,18 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return ApiResponse(
         status="success",
         data=UserResponse.model_validate(current_user).model_dump(mode="json"),
+    )
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+
+
+@router.post("/reset-password", response_model=ApiResponse)
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Request a password reset email. Currently returns success without sending email."""
+    # TODO: Phase 8 - implement actual email sending
+    return ApiResponse(
+        status="success",
+        data={"message": "비밀번호 재설정 링크가 이메일로 전송되었습니다"},
     )

@@ -4,6 +4,7 @@ const nextConfig = {
     // Allow all HTTPS images — deal aggregator scrapes from many unpredictable CDN domains
     remotePatterns: [
       { protocol: "https", hostname: "**" },
+      { protocol: "http", hostname: "**" },
     ],
   },
   async rewrites() {

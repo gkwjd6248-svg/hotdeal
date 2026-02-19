@@ -169,10 +169,21 @@ class ScraperService:
 
         for deal in deals:
             try:
-                # Auto-categorize product if category_hint is provided
+                # Auto-categorize product: use hint, fallback to title classifier
                 category_id = None
                 if deal.product.category_hint:
                     category_id = await self._get_or_match_category(deal.product.category_hint)
+                if not category_id and deal.product.title:
+                    from app.scrapers.utils.normalizer import CategoryClassifier
+                    suggested = CategoryClassifier.classify(deal.product.title)
+                    if suggested:
+                        category_id = await self._get_or_match_category(suggested)
+
+                # Normalize image URLs: http → https
+                if deal.product.image_url and deal.product.image_url.startswith("http://"):
+                    deal.product.image_url = "https://" + deal.product.image_url[7:]
+                if deal.image_url and deal.image_url.startswith("http://"):
+                    deal.image_url = "https://" + deal.image_url[7:]
 
                 # Upsert product
                 product_before_count = await self._count_products(shop.id)

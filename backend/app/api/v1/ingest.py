@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -332,4 +332,114 @@ async def seed_shops(
         status="success",
         created=created,
         already_existed=already_existed,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data migration: fix image URLs + re-classify categories
+# ---------------------------------------------------------------------------
+
+
+class MigrateRequest(BaseModel):
+    api_key: str
+
+
+class MigrateResponse(BaseModel):
+    status: str = "success"
+    images_fixed_products: int = 0
+    images_fixed_deals: int = 0
+    categories_fixed_products: int = 0
+    categories_fixed_deals: int = 0
+
+
+@router.post(
+    "/migrate-fix",
+    response_model=MigrateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Fix existing data: http→https images + auto-classify empty categories",
+    tags=["ingest"],
+)
+async def migrate_fix(
+    body: MigrateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MigrateResponse:
+    """One-time migration to fix image URLs and empty categories in existing data."""
+    _verify_api_key(body.api_key)
+
+    from app.models.product import Product
+    from app.models.deal import Deal
+    from app.models.category import Category
+    from app.scrapers.utils.normalizer import CategoryClassifier
+
+    log = logger.bind(endpoint="migrate-fix")
+
+    # --- 1. Fix http:// → https:// in image URLs ---
+    result_p = await db.execute(
+        update(Product)
+        .where(Product.image_url.like("http://%"))
+        .values(image_url=func.concat("https://", func.substr(Product.image_url, 8)))
+        .execution_options(synchronize_session=False)
+    )
+    images_fixed_products = result_p.rowcount
+
+    result_d = await db.execute(
+        update(Deal)
+        .where(Deal.image_url.like("http://%"))
+        .values(image_url=func.concat("https://", func.substr(Deal.image_url, 8)))
+        .execution_options(synchronize_session=False)
+    )
+    images_fixed_deals = result_d.rowcount
+
+    log.info("images_fixed", products=images_fixed_products, deals=images_fixed_deals)
+
+    # --- 2. Load category slug → id mapping ---
+    cat_result = await db.execute(select(Category.slug, Category.id))
+    cat_map = {row[0]: row[1] for row in cat_result.all()}
+
+    # --- 3. Re-classify products with no category ---
+    products_fixed = 0
+    result = await db.execute(
+        select(Product.id, Product.title).where(Product.category_id.is_(None))
+    )
+    for prod_id, title in result.all():
+        slug = CategoryClassifier.classify(title)
+        if slug and slug in cat_map:
+            await db.execute(
+                update(Product)
+                .where(Product.id == prod_id)
+                .values(category_id=cat_map[slug])
+            )
+            products_fixed += 1
+
+    # --- 4. Re-classify deals with no category ---
+    deals_fixed = 0
+    result = await db.execute(
+        select(Deal.id, Deal.title).where(Deal.category_id.is_(None))
+    )
+    for deal_id, title in result.all():
+        slug = CategoryClassifier.classify(title)
+        if slug and slug in cat_map:
+            await db.execute(
+                update(Deal)
+                .where(Deal.id == deal_id)
+                .values(category_id=cat_map[slug])
+            )
+            deals_fixed += 1
+
+    await db.commit()
+
+    log.info(
+        "migrate_fix_complete",
+        images_products=images_fixed_products,
+        images_deals=images_fixed_deals,
+        categories_products=products_fixed,
+        categories_deals=deals_fixed,
+    )
+
+    return MigrateResponse(
+        status="success",
+        images_fixed_products=images_fixed_products,
+        images_fixed_deals=images_fixed_deals,
+        categories_fixed_products=products_fixed,
+        categories_fixed_deals=deals_fixed,
     )

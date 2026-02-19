@@ -774,6 +774,21 @@ async def vote_deal(deal_id: str, body: VoteBody, authorization: Optional[str] =
     }
 
 
+class MigrateFixBody(BaseModel):
+    api_key: str
+
+
+@app.post("/api/v1/ingest/migrate-fix")
+async def migrate_fix(body: MigrateFixBody):
+    return {
+        "status": "success",
+        "images_fixed_products": 0,
+        "images_fixed_deals": 0,
+        "categories_fixed_products": 0,
+        "categories_fixed_deals": 0,
+    }
+
+
 @app.get("/api/v1/alerts")
 async def list_alerts(authorization: Optional[str] = Header(None)):
     user = _get_mock_user(authorization)
